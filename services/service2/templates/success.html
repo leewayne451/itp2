@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ service_name }} — Welcome</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="card success">
+    <div class="check">&#10003;</div>
+    <h1>Welcome to {{ service_name }}</h1>
+    <p>You are signed in as <strong>{{ employee.full_name }}</strong> (<code>{{ employee.username }}</code>).</p>
+    <p class="subtitle">Access granted by the ServiceJourney source of truth.</p>
+    <a class="btn" href="{{ url_for('logout') }}">Sign out</a>
+  </main>
+  <script>
+    // Poll the source of truth: if access is revoked / the account is
+    // deactivated or offboarded, this live session ends automatically.
+    const CHECK_MS = 5000;
+    async function checkSession() {
+      try {
+        const r = await fetch("/session/status", { cache: "no-store" });
+        const d = await r.json();
+        if (!d.authorized) {
+          window.location.href = "/?reason=" + encodeURIComponent(d.reason || "revoked");
+        }
+      } catch (e) { /* ignore transient errors */ }
+    }
+    setInterval(checkSession, CHECK_MS);
+  </script>
+</body>
+</html>

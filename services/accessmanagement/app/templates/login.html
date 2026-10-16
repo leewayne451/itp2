@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Sign in{% endblock %}
+{% block body_class %}auth{% endblock %}
+
+{# Full-bleed layout: bypasses the dashboard container so the background covers
+   the whole viewport and the card stays centred at any window size. #}
+{% block body %}
+<main class="login-card">
+  <h1>ServiceJourney</h1>
+  <p class="subtitle">Workflow console</p>
+  {% include "_flashes.html" %}
+  <form method="post" action="{{ url_for('auth.login') }}">
+    <label>Username <input name="username" autocomplete="username" required autofocus></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+  <p class="hint">Demo (user = pass): <code>req</code>, <code>hr</code>, <code>director</code>,
+    <code>aa</code>, <code>itadmin</code>, <code>euss</code>, <code>admin</code></p>
+</main>
+{% endblock %}

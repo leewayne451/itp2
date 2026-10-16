@@ -1,0 +1,112 @@
+# ServiceJourney POC — orchestration
+#
+# Containers:
+#   postgres          — SQL database (official image, no source)
+#   backend           — Flask API + source of truth (services/backend)
+#   accessmanagement  — admin console: login + dashboard (services/accessmanagement)
+#   service1          — demo protected service (services/service1)
+#   service2          — demo protected service (services/service2)
+#
+# Only the backend talks to Postgres. The three frontends talk to the backend
+# over the internal 'appnet' network; browsers reach the frontends via the
+# published host ports below.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: accessmgmt
+      POSTGRES_USER: accessmgmt
+      POSTGRES_PASSWORD: accessmgmt
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accessmgmt -d accessmgmt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [appnet]
+
+  backend:
+    build: ./services/backend
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: accessmgmt
+      PGUSER: accessmgmt
+      PGPASSWORD: accessmgmt
+      SECRET_KEY: poc-backend-secret-change-me
+      EMAIL_URL: https://email:5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5000:5000"   # exposed for debugging / direct API access
+    networks: [appnet]
+
+  email:
+    build: ./services/email
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      # Real delivery is optional. Put these in a .env file next to this compose
+      # file (see .env.example). Leave blank and the service just records messages
+      # in its local mailbox at http://localhost:8090 without sending anything.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-true}
+    # ports:
+      # - "8090:5000"   # mailbox web page
+    networks: [appnet]
+
+  accessmanagement:
+    build: ./services/accessmanagement
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      BACKEND_URL: https://backend:5000
+      SECRET_KEY: poc-accessmgmt-secret-change-me
+    depends_on: [backend]
+    ports:
+      - "8080:8080"
+    networks: [appnet]
+
+  service1:
+    build: ./services/service1
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      BACKEND_URL: https://backend:5000
+      SERVICE_KEY: service1
+      SERVICE_NAME: Personal Laptop
+      SECRET_KEY: poc-service1-secret-change-me
+    depends_on: [backend]
+    ports:
+      - "8081:8080"
+    networks: [appnet]
+
+  service2:
+    build: ./services/service2
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      BACKEND_URL: https://backend:5000
+      SERVICE_KEY: service2
+      SERVICE_NAME: Account
+      SECRET_KEY: poc-service2-secret-change-me
+    depends_on: [backend]
+    ports:
+      - "8082:8080"
+    networks: [appnet]
+
+volumes:
+  pgdata:
+
+networks:
+  appnet:
+    driver: bridge

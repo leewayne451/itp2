@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ServiceJourney{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  {% block body %}
+    {% if current_user %}
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('dashboard.index') }}">ServiceJourney</a>
+      <div class="topbar-right">
+        <span>{{ current_user.full_name }}</span>
+        <span class="role-badge">{{ ROLE_LABEL.get(current_user.role, current_user.role) }}</span>
+        <a class="btn-link" href="{{ url_for('auth.logout') }}">Sign out</a>
+      </div>
+    </header>
+    {% endif %}
+
+    <main class="container">
+      {% include "_flashes.html" %}
+      {% block content %}{% endblock %}
+    </main>
+  {% endblock %}
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Create account</h2></div>
+  <p class="muted small">Create employees and role accounts. Access itself is only granted through the request workflow.</p>
+  <form method="post" action="{{ url_for('admin.create_employee') }}" class="stack-form inline-grid">
+    <label>Full name <input name="full_name" required></label>
+    <label>Username <input name="username" required></label>
+    <label>Password <input name="password" required></label>
+    <label>Email <input name="email" type="email" placeholder="name@example.com"></label>
+    <label>Role
+      <select name="role">
+        {% for key, lbl in ROLE_LABEL.items() %}<option value="{{ key }}">{{ lbl }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Department
+      <select name="department_id">
+        <option value="">— none —</option>
+        {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="primary" type="submit">Create</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Accounts &amp; employees</h2></div>
+  <p class="muted small">Manage roles, departments, emails and status. No direct access toggles — access flows through requests.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Username</th><th>Access</th><th>Status</th><th>Edit (email / role / department)</th><th></th></tr></thead>
+      <tbody>
+        {% for e in employees %}
+        <tr>
+          <td>{{ e.full_name }}</td>
+          <td><code>{{ e.username }}</code></td>
+          <td class="small">{% for sid in e.access %}{{ (services|selectattr('id','equalto',sid)|first).name }}{{ ", " if not loop.last }}{% else %}—{% endfor %}</td>
+          <td>
+            <form method="post" action="{{ url_for('admin.update_employee', emp_id=e.id) }}" class="inline-form">
+              <input type="hidden" name="status" value="{{ 'inactive' if e.status == 'active' else 'active' }}">
+              <button class="status-pill {{ e.status }}" type="submit" title="Toggle">{{ e.status }}</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('admin.update_employee', emp_id=e.id) }}" class="inline-form">
+              <input type="email" name="email" value="{{ e.email or '' }}" class="email-in">
+              <select name="role">
+                {% for key, lbl in ROLE_LABEL.items() %}<option value="{{ key }}" {{ 'selected' if key == e.role }}>{{ lbl }}</option>{% endfor %}
+              </select>
+              <select name="department_id">
+                <option value="" {{ 'selected' if not e.department_id }}>—</option>
+                {% for d in departments %}<option value="{{ d.id }}" {{ 'selected' if d.id == e.department_id }}>{{ d.name }}</option>{% endfor %}
+              </select>
+              <button class="btn-sm primary" type="submit">Save</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('admin.delete_employee', emp_id=e.id) }}" class="inline-form" data-confirm="Delete {{ e.full_name }}?">
+              <button class="btn-sm danger" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>All requests (oversight)</h2></div>
+  {{ m.requests_table(all_requests, show_reason=true) }}
+</section>
+{% endblock %}

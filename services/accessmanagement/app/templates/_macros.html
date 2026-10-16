@@ -1,0 +1,63 @@
+{# Reusable request table. `extra_col` optionally renders an actions cell per row. #}
+{% macro requests_table(rows, show_requestor=true, show_reason=false) %}
+{% set cols = 6 + (1 if show_requestor else 0) + (1 if show_reason else 0) %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th>
+        {% if show_requestor %}<th>Requestor</th>{% endif %}
+        {% if show_reason %}<th>Reason given</th>{% endif %}
+        <th>Status</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if not rows %}
+        <tr><td colspan="{{ cols }}" class="muted">Nothing here.</td></tr>
+      {% endif %}
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
+        <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
+        <td>{{ req_resource(r) }}</td>
+        {% if show_requestor %}
+          <td>{{ r.requestor_name }}<div class="small muted">{{ behalf_label(r) }}</div></td>
+        {% endif %}
+        {% if show_reason %}<td class="reason-cell">{{ r.justification or "— none given —" }}</td>{% endif %}
+        <td><span class="pill {{ status_class(r.status) }}">{{ status_label(r.status) }}</span></td>
+        <td><a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{# History table: shows the acting account's own action. #}
+{% macro history_table(rows) %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th>
+          <th>Requestor</th><th>My action</th><th>When</th><th>Final status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% if not rows %}<tr><td colspan="9" class="muted">No history yet.</td></tr>{% endif %}
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
+        <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
+        <td>{{ req_resource(r) }}</td>
+        <td>{{ r.requestor_name }}<div class="small muted">{{ behalf_label(r) }}</div></td>
+        <td><span class="pill {{ 'bad' if r.my_action == 'rejected' else 'ok' }}">{{ ACTION_LABEL.get(r.my_action, r.my_action) }}</span></td>
+        <td class="small">{{ r.my_action_at | dt }}</td>
+        <td><span class="pill {{ status_class(r.status) }}">{{ status_label(r.status) }}</span></td>
+        <td><a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}

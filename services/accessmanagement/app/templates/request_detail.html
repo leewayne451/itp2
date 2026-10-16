@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Request #{{ r.id }}{% endblock %}
+{% block content %}
+<p><a class="btn-link" href="{{ url_for('dashboard.index') }}">← Back to dashboard</a></p>
+<section class="panel">
+  <div class="panel-head"><h2>Request #{{ r.id }} — {{ TYPE_LABEL.get(r.type, r.type) }}</h2></div>
+  <div class="detail-grid">
+    <div class="detail-row"><span class="detail-k">Target</span><span>{{ r.target_name }} ({{ r.target_username }})</span></div>
+    <div class="detail-row"><span class="detail-k">Department</span><span>{{ r.target_department_name or "—" }}</span></div>
+    {% if r.type == 'shift' %}
+      <div class="detail-row"><span class="detail-k">Transfer</span><span>{{ r.source_department_name or "?" }} → {{ r.new_department_name or "?" }}</span></div>
+    {% elif r.type == 'onboard' %}
+      <div class="detail-row"><span class="detail-k">Onboard into</span><span>{{ r.new_department_name or "—" }}</span></div>
+    {% else %}
+      <div class="detail-row"><span class="detail-k">Resource</span><span>{{ r.service_name or "—" }}</span></div>
+    {% endif %}
+    <div class="detail-row"><span class="detail-k">Requestor</span><span>{{ r.requestor_name }}</span></div>
+    <div class="detail-row"><span class="detail-k">Requested for</span><span>{{ "On behalf of the employee" if r.on_behalf else "Self" }}</span></div>
+    <div class="detail-row"><span class="detail-k">Status</span><span>{{ status_label(r.status) }}</span></div>
+    <div class="detail-row"><span class="detail-k">Justification</span><span>{{ r.justification or "—" }}</span></div>
+    <div class="detail-row"><span class="detail-k">Appointment</span><span>{{ r.appointment_at | dt }}</span></div>
+    <div class="detail-row"><span class="detail-k">Asset</span><span>{{ r.asset_tag or "—" }}</span></div>
+    {% if r.reject_reason %}<div class="detail-row"><span class="detail-k">Reject reason</span><span>{{ r.reject_reason }}</span></div>{% endif %}
+  </div>
+
+  {% if r.documents %}
+  <h4 class="timeline-head">Documents</h4>
+  <div class="docs">
+    {% for d in r.documents %}<a class="btn-sm doc-btn" href="{{ url_for('assets.download', doc_id=d.id) }}">⬇ {{ d.filename }}</a>{% endfor %}
+  </div>
+  {% endif %}
+
+  <h4 class="timeline-head">Timeline</h4>
+  <ol class="timeline">
+    {% for e in r.events %}
+    <li>
+      <span class="tl-action">{{ e.action }}</span>
+      <span class="tl-meta"> — {{ e.actor_name or "system" }}{% if e.actor_role %} ({{ ROLE_LABEL.get(e.actor_role, e.actor_role) }}){% endif %} · {{ e.created_at | dt }}</span>
+      {% if e.note %}<div class="tl-note">{{ e.note }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

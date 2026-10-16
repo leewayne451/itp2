@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Asset {{ asset.asset_tag }}{% endblock %}
+{% block content %}
+<p><a class="btn-link" href="{{ url_for('dashboard.index') }}">← Back to dashboard</a></p>
+<section class="panel">
+  <div class="panel-head"><h2>Asset {{ asset.asset_tag }} — {{ asset.kind }}</h2></div>
+  <div class="detail-grid">
+    <div class="detail-row"><span class="detail-k">Status</span><span>{{ asset.status }}</span></div>
+    <div class="detail-row"><span class="detail-k">Current holder</span>
+      <span>{% if asset.current_holder %}{{ asset.current_holder }} ({{ asset.current_dept or "—" }}){% else %}— none —{% endif %}</span></div>
+  </div>
+  <h4 class="timeline-head">Chain of custody</h4>
+  <ol class="timeline">
+    {% if not events %}<li class="muted">No custody events yet.</li>{% endif %}
+    {% for e in events %}
+    <li>
+      <span class="tl-action">{{ e.action }}</span>
+      <span class="tl-meta"> — {{ e.employee_name or "?" }}{% if e.dept %} ({{ e.dept }}){% endif %} · {{ e.at | dt }}</span>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

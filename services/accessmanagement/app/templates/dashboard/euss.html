@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Provision SN assets</h2></div>
+  <p class="muted small">Assign a specific, matching-kind asset tag for each resource the employee needs. Tags are required and validated.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th><th>Reason given</th><th>Assign asset(s)</th></tr></thead>
+      <tbody>
+        {% if not provisions %}<tr><td colspan="6" class="muted">Nothing to provision.</td></tr>{% endif %}
+        {% for r in provisions %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
+          <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
+          <td>{{ req_resource(r) }}</td>
+          <td class="reason-cell">{{ r.justification or "— none given —" }}</td>
+          <td>
+            <form method="post" action="{{ url_for('requests.provision', rid=r.id) }}" class="inline-form">
+              {% set blocked = namespace(v=false) %}
+              {% if not r.plan %}
+                <span class="small muted">No new asset needed (already held).</span>
+              {% endif %}
+              {% for item in r.plan %}
+                <label class="kind-pick">{{ item.kind }}
+                  {% if item.available %}
+                    <select name="tag_{{ item.kind }}" required>
+                      <option value="">— select {{ item.kind }} tag —</option>
+                      {% for tag in item.available %}<option value="{{ tag }}">{{ tag }}</option>{% endfor %}
+                    </select>
+                  {% else %}
+                    {% set blocked.v = true %}
+                    <select disabled><option>no {{ item.kind }} available</option></select>
+                  {% endif %}
+                </label>
+              {% endfor %}
+              <a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a>
+              <button class="btn-sm primary" type="submit" {{ 'disabled' if blocked.v }}>Provision</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Retrieve SN assets</h2></div>
+  <p class="muted small">Return requests. Retrieving revokes the access and returns the asset.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Target (dept)</th><th>Resource</th><th>Requestor</th><th>Reason given</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% if not returns %}<tr><td colspan="6" class="muted">Nothing to retrieve.</td></tr>{% endif %}
+        {% for r in returns %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
+          <td>{{ req_resource(r) }}</td>
+          <td>{{ r.requestor_name }}<div class="small muted">{{ behalf_label(r) }}</div></td>
+          <td class="reason-cell">{{ r.justification or "— none given —" }}</td>
+          <td class="row-actions">
+            <a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a>
+            <form method="post" action="{{ url_for('requests.retrieve', rid=r.id) }}" class="inline-form">
+              <button class="btn-sm primary" type="submit">Retrieve (revoke access)</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Asset inventory</h2></div>
+  <p class="muted small">Laptop and Account assets. Open History for an asset's chain of custody.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tag</th><th>Kind</th><th>Status</th><th>Assigned to</th><th>Department</th><th></th></tr></thead>
+      <tbody>
+        {% for a in assets %}
+        <tr>
+          <td><code>{{ a.asset_tag }}</code></td>
+          <td>{{ a.kind }}</td>
+          <td><span class="pill {{ 'wait' if a.status=='assigned' else 'ok' }}">{{ a.status }}</span></td>
+          <td>{{ a.assigned_name or "—" }}</td>
+          <td class="small">{{ a.assigned_dept or "—" }}</td>
+          <td><a class="btn-sm" href="{{ url_for('assets.history', asset_id=a.id) }}">History</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>My action history</h2></div>
+  {{ m.history_table(history) }}
+</section>
+{% endblock %}

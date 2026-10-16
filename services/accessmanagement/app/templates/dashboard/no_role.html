@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><h2>No actions available</h2></div>
+  <p class="muted">You are signed in as {{ ROLE_LABEL.get(current_user.role, current_user.role) }}.
+    This role has no workflow actions in the console.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head"><h2>IT processing queue</h2></div>
+  <p class="muted small">Processing executes the access change. If a grant would exceed quota, enter an override justification and process again.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th><th>Requestor</th><th>Reason given</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% if not queue %}<tr><td colspan="7" class="muted">Nothing to process.</td></tr>{% endif %}
+        {% for r in queue %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
+          <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
+          <td>{{ req_resource(r) }}</td>
+          <td>{{ r.requestor_name }}<div class="small muted">{{ behalf_label(r) }}</div></td>
+          <td class="reason-cell">{{ r.justification or "— none given —" }}</td>
+          <td class="row-actions">
+            <a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a>
+            <form method="post" action="{{ url_for('requests.process', rid=r.id) }}" class="inline-form">
+              <input type="text" name="override_reason" placeholder="override reason (if over quota)" class="reason-in wide">
+              <button class="btn-sm primary" type="submit">Process</button>
+            </form>
+            <form method="post" action="{{ url_for('requests.reject', rid=r.id) }}" class="inline-form">
+              <input type="text" name="reason" placeholder="reason" class="reason-in">
+              <button class="btn-sm danger" type="submit">Reject</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Department → service mapping</h2></div>
+  <p class="muted small">Which services each department grants. Applied when an employee is onboarded/shifted into it.</p>
+  <div class="dept-grid">
+    {% for d in departments %}
+    <form method="post" action="{{ url_for('admin.set_department_access', dept_id=d.id) }}" class="dept-card">
+      <h3>{{ d.name }}</h3>
+      <div class="checkbox-list">
+        {% for s in services %}
+        <label class="checkbox">
+          <input type="checkbox" name="service_ids" value="{{ s.id }}" {{ 'checked' if s.id in d.access }}> {{ s.name }}
+        </label>
+        {% endfor %}
+      </div>
+      <button class="btn-sm primary" type="submit">Save mapping</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Department quotas</h2></div>
+  <p class="muted small">How many laptops and accounts each department may hold. You manage these
+    directly. A grant is checked against <em>both</em> the department quota and the
+    organisation-wide quota below — exceeding either needs an override justification.</p>
+  {# Forms live outside the table (a <form> may not be a child of <tr>); the
+     inputs below attach to them with the HTML5 `form` attribute. #}
+  {% for d in department_quotas %}
+    <form method="post" action="{{ url_for('admin.set_department_quotas', dept_id=d.department_id) }}" id="dq-{{ d.department_id }}"></form>
+  {% endfor %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Department</th>
+          {% for r in (department_quotas[0].resources if department_quotas else []) %}
+            <th>{{ r.name }} (used / allowed)</th>
+          {% endfor %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not department_quotas %}<tr><td colspan="4" class="muted">No departments.</td></tr>{% endif %}
+        {% for d in department_quotas %}
+        <tr>
+          <td>{{ d.department_name }}</td>
+          {% for r in d.resources %}
+          <td>
+            <span class="pill {{ 'bad' if r.remaining <= 0 else 'wait' if r.remaining <= 1 else 'ok' }}">{{ r.used }}</span>
+            /
+            <input type="number" name="quota_{{ r.service_id }}" value="{{ r.allowed }}" min="0"
+                   class="qty" form="dq-{{ d.department_id }}">
+          </td>
+          {% endfor %}
+          <td><button class="btn-sm primary" type="submit" form="dq-{{ d.department_id }}">Save</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Organisation-wide quotas</h2></div>
+  <p class="muted small">The overall cap across all departments. Changes here are proposed by the
+    Approving Authority and approved by you below.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Resource</th><th>Allowed</th><th>Used</th><th>Remaining</th></tr></thead>
+      <tbody>
+        {% for q in quotas %}
+        <tr><td>{{ q.name }}</td><td>{{ q.allowed }}</td><td>{{ q.used }}</td>
+          <td><span class="pill {{ 'bad' if q.remaining <= 0 else 'wait' if q.remaining <= 1 else 'ok' }}">{{ q.remaining }}</span></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Quota change approvals</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Resource</th><th>Current</th><th>Requested</th><th>By</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% if not quota_requests %}<tr><td colspan="8" class="muted">None.</td></tr>{% endif %}
+        {% for q in quota_requests %}
+        <tr>
+          <td>{{ q.id }}</td><td>{{ q.service_name }}</td><td>{{ q.current_allowed }}</td><td>{{ q.new_allowed }}</td>
+          <td>{{ q.requested_by_name }}</td><td class="small">{{ q.reason or "—" }}</td>
+          <td><span class="pill {{ 'ok' if q.status=='approved' else 'bad' if q.status=='rejected' else 'wait' }}">{{ q.status }}</span></td>
+          <td class="row-actions">
+            {% if q.status == 'pending' %}
+              <form method="post" action="{{ url_for('quotas.approve', qid=q.id) }}" class="inline-form">
+                <button class="btn-sm primary" type="submit">Approve</button>
+              </form>
+              <form method="post" action="{{ url_for('quotas.reject', qid=q.id) }}" class="inline-form">
+                <input type="text" name="note" placeholder="reason" class="reason-in">
+                <button class="btn-sm danger" type="submit">Reject</button>
+              </form>
+            {% else %}<span class="small muted">{{ q.decide_note or "—" }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>My action history</h2></div>
+  {{ m.history_table(history) }}
+</section>
+{% endblock %}

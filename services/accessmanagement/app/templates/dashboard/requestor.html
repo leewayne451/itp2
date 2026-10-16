@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block content %}
+
+{% macro requesting_for() %}
+  <label>Requesting for
+    <select name="on_behalf">
+      <option value="self">Myself</option>
+      <option value="behalf">On behalf of someone</option>
+    </select>
+  </label>
+{% endmacro %}
+{% macro doc_and_submit(label) %}
+  <label>Justification <textarea name="justification" rows="2" placeholder="optional"></textarea></label>
+  <label>Supporting documents (PDF only, optional) <input type="file" name="documents" accept="application/pdf,.pdf" multiple></label>
+  <button class="primary" type="submit">{{ label }}</button>
+{% endmacro %}
+
+<section class="panel">
+  <div class="panel-head"><h2>① Appointments to book</h2></div>
+  <p class="muted small">IT has processed these — book an appointment to send them to EUSS.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Type</th><th>Target</th><th>Resource</th><th>Book</th></tr></thead>
+      <tbody>
+        {% if not to_book %}<tr><td colspan="5" class="muted">Nothing to book right now.</td></tr>{% endif %}
+        {% for r in to_book %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
+          <td>{{ r.target_name }}</td>
+          <td>{{ req_resource(r) }}</td>
+          <td>
+            <form method="post" action="{{ url_for('requests.appointment', rid=r.id) }}" class="inline-form">
+              <input type="datetime-local" name="appointment_at" required>
+              <button class="btn-sm primary" type="submit">Book appointment</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="two-col">
+  {# ---- GRANT ---- #}
+  <section class="panel">
+    <div class="panel-head"><h2>Raise access request</h2></div>
+    <p class="muted small">Give an existing employee one more service.</p>
+    <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form service-form" data-mode="grant">
+      <input type="hidden" name="type" value="grant">
+      <label>Employee
+        <select name="target_employee_id" class="target-select" required>
+          <option value="">— select employee —</option>
+          {% for e in onboarded %}<option value="{{ e.id }}" data-access="{{ e.access|join(',') }}">{{ e.full_name }} ({{ e.username }}) — {{ e.department_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Service
+        <select name="service_id" class="service-select" required>
+          <option value="">— select employee first —</option>
+          {% for s in services %}<option value="{{ s.id }}" data-service-id="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+        </select>
+      </label>
+      {{ requesting_for() }}
+      {{ doc_and_submit("Submit request") }}
+    </form>
+  </section>
+
+  {# ---- RETURN ---- #}
+  <section class="panel">
+    <div class="panel-head"><h2>Raise return request</h2></div>
+    <p class="muted small">Offboard a service the employee currently holds.</p>
+    <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form service-form" data-mode="return">
+      <input type="hidden" name="type" value="return">
+      <label>Employee
+        <select name="target_employee_id" class="target-select" required>
+          <option value="">— select employee —</option>
+          {% for e in onboarded %}<option value="{{ e.id }}" data-access="{{ e.access|join(',') }}">{{ e.full_name }} ({{ e.username }}) — {{ e.department_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Service
+        <select name="service_id" class="service-select" required>
+          <option value="">— select employee first —</option>
+          {% for s in services %}<option value="{{ s.id }}" data-service-id="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+        </select>
+      </label>
+      {{ requesting_for() }}
+      {{ doc_and_submit("Raise return") }}
+    </form>
+  </section>
+</div>
+
+<div class="two-col">
+  {# ---- ONBOARD ---- #}
+  <section class="panel">
+    <div class="panel-head"><h2>Onboard new employee</h2></div>
+    <p class="muted small">For employees not yet in any department. Grants that department's services.</p>
+    {% if not unonboarded %}<p class="muted small">No un-onboarded employees right now.</p>{% endif %}
+    <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form">
+      <input type="hidden" name="type" value="onboard">
+      <label>Employee (no department)
+        <select name="target_employee_id" required>
+          <option value="">— un-onboarded employee —</option>
+          {% for e in unonboarded %}<option value="{{ e.id }}">{{ e.full_name }} ({{ e.username }})</option>{% endfor %}
+        </select>
+      </label>
+      <label>Onboard into department
+        <select name="department_id" required>
+          <option value="">— department —</option>
+          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        </select>
+      </label>
+      {{ requesting_for() }}
+      {{ doc_and_submit("Onboard") }}
+    </form>
+  </section>
+
+  {# ---- SHIFT ---- #}
+  <section class="panel">
+    <div class="panel-head"><h2>Request department shift</h2></div>
+    <p class="muted small">Move an employee. Services are suspended during transfer, then replaced with the new department's.</p>
+    <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form">
+      <input type="hidden" name="type" value="shift">
+      <label>Employee
+        <select name="target_employee_id" required>
+          <option value="">— select employee —</option>
+          {% for e in onboarded %}<option value="{{ e.id }}">{{ e.full_name }} ({{ e.username }}) — currently {{ e.department_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>New department
+        <select name="department_id" required>
+          <option value="">— new department —</option>
+          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        </select>
+      </label>
+      {{ requesting_for() }}
+      {{ doc_and_submit("Request shift") }}
+    </form>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>My requests</h2></div>
+  {{ m.requests_table(mine) }}
+</section>
+{% endblock %}
