@@ -43,6 +43,44 @@
   </div>
 </section>
 
+{# ---- MANDATORY JOB ROTATION (CHANGE 006) ---- #}
+{% if planned_rotations %}
+<section class="panel" id="rotations-to-raise">
+  <div class="panel-head"><h2>Rotations to raise</h2></div>
+  <p class="muted small">A Director has confirmed these Mandatory Job Rotations. The department shift request is pre-filled —
+    add any supporting documents and submit it; it then goes through the usual approvals.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Officer</th><th>Move</th><th>Time in department</th><th>Confirmed by</th><th>Shift request</th></tr></thead>
+      <tbody>
+        {% for o in planned_rotations %}
+        <tr>
+          <td>{{ o.full_name }}<div class="small muted">{{ o.username }}</div></td>
+          <td>{{ o.department_name }} → <strong>{{ o.decision.target_department_name }}</strong></td>
+          <td>{{ o.tenure_text }}<div class="small muted">since {{ o.department_since }}</div></td>
+          <td>{{ o.decision.decided_by_name or "—" }}<div class="small muted">{{ o.decision.decided_at|dt }}</div></td>
+          <td>
+            <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form">
+              <input type="hidden" name="type" value="shift">
+              <input type="hidden" name="target_employee_id" value="{{ o.employee_id }}">
+              <input type="hidden" name="department_id" value="{{ o.decision.target_department_id }}">
+              <input type="hidden" name="rotation_decision_id" value="{{ o.decision.id }}">
+              <input type="hidden" name="on_behalf" value="behalf">
+              <label class="small">Justification
+                <textarea name="justification" rows="3">Mandatory Job Rotation: {{ o.tenure_text }} in {{ o.department_name }} (since {{ o.department_since }}). Rotation to {{ o.decision.target_department_name }} confirmed by {{ o.decision.decided_by_name or "Director" }} on {{ (o.decision.decided_at | dt)[:10] }}.{% if o.decision.reason %} Note: {{ o.decision.reason }}{% endif %}</textarea>
+              </label>
+              <label class="small">Supporting documents (PDF, optional) <input type="file" name="documents" accept="application/pdf,.pdf" multiple></label>
+              <button class="btn-sm primary" type="submit">Raise shift request</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 <div class="two-col">
   {# ---- GRANT ---- #}
   <section class="panel">

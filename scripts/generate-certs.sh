@@ -51,6 +51,7 @@ DNS.4 = accessmanagement
 DNS.5 = service1
 DNS.6 = service2
 DNS.7 = postgres
+DNS.8 = keycloak
 IP.1  = 127.0.0.1
 IP.2  = ::1
 EOF

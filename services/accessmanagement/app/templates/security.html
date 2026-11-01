@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Security{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <div class="panel-head"><h2>Single sign-on</h2>
+    {% if me.mfa %}<span class="pill ok">Signed in with 2FA</span>{% else %}<span class="pill wait">Password only</span>{% endif %}
+  </div>
+  <p class="muted small">You are signed in through <strong>ServiceJourney SSO</strong> (Keycloak). The same
+    sign-in gives you the console, the Personal Laptop and the Account services; signing out of any of them
+    signs you out of all of them.</p>
+  <div class="detail-grid">
+    <div class="detail-row"><span class="detail-k">Account</span><span><code>{{ me.username }}</code></span></div>
+    <div class="detail-row"><span class="detail-k">Two-factor (TOTP)</span>
+      <span>{% if me.mfa_required %}Required for your role{% else %}Optional — recommended{% endif %}</span></div>
+    {% if me.auth_time %}<div class="detail-row"><span class="detail-k">Signed in</span><span data-testid="auth-time">{{ me.auth_time }}</span></div>{% endif %}
+  </div>
+</section>
+
+<section class="panel narrow">
+  <div class="panel-head"><h2>Manage your sign-in</h2></div>
+  <p class="muted small">Passwords, authenticator apps and sessions are managed in your SSO account
+    (opens the ServiceJourney account page):</p>
+  <ul class="link-list">
+    <li><a class="btn-sm primary" href="{{ links.signing_in }}" data-testid="link-signing-in">Change password &amp; two-factor authentication</a>
+      <span class="muted small">— set up Google / Microsoft Authenticator, or replace it</span></li>
+    <li><a class="btn-sm" href="{{ links.devices }}" data-testid="link-devices">Where you're signed in</a>
+      <span class="muted small">— see devices and sign out of other sessions</span></li>
+    <li><a class="btn-sm" href="{{ links.personal }}">Personal info</a></li>
+  </ul>
+  <p class="hint left">Forgot your password? Use <em>Forgot password?</em> on the sign-in page. Lost your
+    phone? Ask an administrator to reset your two-factor authentication.</p>
+</section>
+{% endblock %}

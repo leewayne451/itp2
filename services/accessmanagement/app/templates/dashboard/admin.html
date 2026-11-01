@@ -4,11 +4,13 @@
 
 <section class="panel">
   <div class="panel-head"><h2>Create account</h2></div>
-  <p class="muted small">Create employees and role accounts. Access itself is only granted through the request workflow.</p>
+  <p class="muted small">Create employees and role accounts. Access itself is only granted through the request workflow.
+    The initial password is temporary — the user must replace it at first sign-in. Leave it blank to generate a strong one.</p>
   <form method="post" action="{{ url_for('admin.create_employee') }}" class="stack-form inline-grid">
     <label>Full name <input name="full_name" required></label>
     <label>Username <input name="username" required></label>
-    <label>Password <input name="password" required></label>
+    <label>Initial password <input name="password" type="password" autocomplete="new-password"
+           placeholder="blank = generate one"></label>
     <label>Email <input name="email" type="email" placeholder="name@example.com"></label>
     <label>Role
       <select name="role">
@@ -30,7 +32,7 @@
   <p class="muted small">Manage roles, departments, emails and status. No direct access toggles — access flows through requests.</p>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Name</th><th>Username</th><th>Access</th><th>Status</th><th>Edit (email / role / department)</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Username</th><th>Access</th><th>Status</th><th>2FA</th><th>Edit (email / role / department / in department since)</th><th></th></tr></thead>
       <tbody>
         {% for e in employees %}
         <tr>
@@ -44,6 +46,16 @@
             </form>
           </td>
           <td>
+            {% if e.mfa_enabled %}
+            <form method="post" action="{{ url_for('admin.reset_mfa', emp_id=e.id) }}" class="inline-form"
+                  data-confirm="Reset two-factor authentication for {{ e.full_name }}? They will have to set it up again.">
+              <span class="pill ok">On</span>
+              <button class="btn-sm" type="submit" title="Lost device: clear their authenticator">Reset</button>
+            </form>
+            {% elif e.mfa_enabled is none %}<span class="pill wait" title="Keycloak could not be reached">?</span>
+            {% else %}<span class="pill bad">Off</span>{% endif %}
+          </td>
+          <td>
             <form method="post" action="{{ url_for('admin.update_employee', emp_id=e.id) }}" class="inline-form">
               <input type="email" name="email" value="{{ e.email or '' }}" class="email-in">
               <select name="role">
@@ -53,19 +65,42 @@
                 <option value="" {{ 'selected' if not e.department_id }}>—</option>
                 {% for d in departments %}<option value="{{ d.id }}" {{ 'selected' if d.id == e.department_id }}>{{ d.name }}</option>{% endfor %}
               </select>
+              {% if e.role == 'employee' and e.department_id %}
+              <label class="small muted" title="Start of the Mandatory Job Rotation clock">since
+                <input type="date" name="department_since" value="{{ e.department_since or '' }}">
+              </label>
+              <input type="hidden" name="department_since_was" value="{{ e.department_since or '' }}">
+              {% endif %}
               <button class="btn-sm primary" type="submit">Save</button>
             </form>
           </td>
-          <td>
+          <td><div class="row-actions">
+            <form method="post" action="{{ url_for('admin.reset_password', emp_id=e.id) }}" class="inline-form"
+                  data-confirm="Issue a temporary password for {{ e.full_name }}? Their current password stops working and they are signed out everywhere.">
+              <input type="hidden" name="username" value="{{ e.username }}">
+              <input type="hidden" name="full_name" value="{{ e.full_name }}">
+              <button class="btn-sm" type="submit" title="Help-desk reset: issue a temporary password">Reset password</button>
+            </form>
+            <form method="post" action="{{ url_for('admin.revoke_sessions', emp_id=e.id) }}" class="inline-form"
+                  data-confirm="Sign {{ e.full_name }} out of every session?">
+              <button class="btn-sm" type="submit" title="End all of this user's sessions">Sign out</button>
+            </form>
             <form method="post" action="{{ url_for('admin.delete_employee', emp_id=e.id) }}" class="inline-form" data-confirm="Delete {{ e.full_name }}?">
               <button class="btn-sm danger" type="submit">Delete</button>
             </form>
-          </td>
+          </div></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Audit trail</h2></div>
+  <p class="muted small">Every action on this page — and every sign-in, quota change and access decision — is
+    written to the tamper-evident audit trail. It is reviewed and exported by IT Admin, separately from the
+    administrators whose actions it records.</p>
 </section>
 
 <section class="panel">

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+# .env
+.venv/
+venv/
+.DS_Store
+
+# TLS material — private keys must never be committed.
+# Regenerate with: bash scripts/generate-certs.sh
+certs/*.key
+certs/*.srl

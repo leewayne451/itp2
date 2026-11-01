@@ -34,6 +34,99 @@
   </div>
 </section>
 
+{# ---------------- Mandatory Job Rotation (CHANGE 006) ---------------- #}
+{% if mjr is not none and current_user.role in ('director', 'hr') %}
+<section class="panel" id="rotation">
+  <div class="panel-head"><h2>Due for rotation (Mandatory Job Rotation)</h2></div>
+  <p class="muted small">Officers who have been in the same department for {{ mjr.settings.rotation_years }} years or more.
+    {% if current_user.role == 'director' %}
+      <strong>Rotate</strong> picks the new department — a department shift request is then prepared for the Requestor
+      and goes through the usual approvals (access is switched to the new department's when IT processes it).
+      <strong>Keep</strong> needs a reason; the officer comes back for review in {{ mjr.settings.keep_review_months }} months.
+    {% else %}
+      The Director decides for each officer; Directors are e-mailed automatically when someone becomes due.
+    {% endif %}</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Officer</th><th>Department</th><th>In department since</th><th>Time in department</th><th>Rotation due</th>
+        <th>Status</th>{% if current_user.role == 'director' %}<th>Decision</th>{% endif %}</tr></thead>
+      <tbody>
+        {% if not mjr_due %}<tr><td colspan="7" class="muted">Nobody is due for rotation.</td></tr>{% endif %}
+        {% for o in mjr_due %}
+        {% set st = rotation_state(o.state) %}
+        <tr>
+          <td>{{ o.full_name }}<div class="small muted">{{ o.username }}</div></td>
+          <td>{{ o.department_name }}</td>
+          <td style="white-space:nowrap">{{ o.department_since }}</td>
+          <td style="white-space:nowrap"><strong>{{ o.tenure_text }}</strong></td>
+          <td style="white-space:nowrap">{{ o.due_on }}</td>
+          <td><span class="pill {{ st[1] }}">{{ st[0] }}</span>
+            {% if o.decision and o.decision.decision == 'keep' %}<div class="small muted">kept until {{ o.decision.review_after }} — review again</div>{% endif %}
+            {% if o.decision and o.decision.decision == 'rotate' %}<div class="small muted">shift #{{ o.decision.request_id }} was rejected — decide again</div>{% endif %}
+          </td>
+          {% if current_user.role == 'director' %}
+          <td class="row-actions">
+            <form method="post" action="{{ url_for('rotations.rotate', emp_id=o.employee_id) }}" class="inline-form">
+              <select name="department_id" required class="reason-in">
+                <option value="">— rotate to —</option>
+                {% for d in departments if d.id != o.department_id %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+              </select>
+              <input type="text" name="reason" placeholder="note (optional)" class="reason-in">
+              <button class="btn-sm primary" type="submit">Rotate</button>
+            </form>
+            <form method="post" action="{{ url_for('rotations.keep', emp_id=o.employee_id) }}" class="inline-form">
+              <input type="text" name="reason" placeholder="reason to keep (required)" class="reason-in wide" required>
+              <button class="btn-sm danger" type="submit">Keep</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Rotation tracker</h2>
+    {% if current_user.role == 'hr' %}
+    <form method="post" action="{{ url_for('rotations.check') }}" class="inline-form">
+      <button class="btn-sm" type="submit">Check now &amp; e-mail Directors</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="muted small">Coming up within {{ mjr.settings.due_soon_days }} days, decisions already made, and transfers in progress.
+    The clock restarts automatically when a department shift is processed.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Officer</th><th>Department</th><th>Time in department</th><th>Rotation due</th><th>Status</th><th>Decision</th></tr></thead>
+      <tbody>
+        {% if not mjr_soon and not mjr_tracked %}<tr><td colspan="6" class="muted">Nothing coming up.</td></tr>{% endif %}
+        {% for o in mjr_soon + mjr_tracked %}
+        {% set st = rotation_state(o.state) %}
+        <tr>
+          <td>{{ o.full_name }}<div class="small muted">{{ o.username }}</div></td>
+          <td>{{ o.department_name }}</td>
+          <td>{{ o.tenure_text }}</td>
+          <td>{{ o.due_on }}{% if o.state == 'due_soon' %}<div class="small muted">in {{ o.days_to_due }} days</div>{% endif %}</td>
+          <td><span class="pill {{ st[1] }}">{{ st[0] }}</span></td>
+          <td class="small">
+            {% if o.decision %}
+              {% if o.decision.decision == 'rotate' %}Rotate → {{ o.decision.target_department_name }}{% else %}Keep{% endif %}
+              by {{ o.decision.decided_by_name or '—' }}, {{ o.decision.decided_at|dt }}
+              {% if o.decision.reason %}<div class="muted">“{{ o.decision.reason }}”</div>{% endif %}
+              {% if o.decision.decision == 'keep' %}<div class="muted">review again {{ o.decision.review_after }}</div>{% endif %}
+              {% if o.decision.request_id %}<div><a href="{{ url_for('requests.detail', rid=o.decision.request_id) }}">shift request #{{ o.decision.request_id }}</a> — {{ status_label(o.decision.request_status) }}</div>{% endif %}
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {% if current_user.role == 'aa' %}
 <section class="panel">
   <div class="panel-head"><h2>Department quotas</h2></div>

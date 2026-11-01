@@ -149,4 +149,10 @@
   <div class="panel-head"><h2>My action history</h2></div>
   {{ m.history_table(history) }}
 </section>
+<section class="panel">
+  <div class="panel-head"><h2>Audit trail</h2>
+    <a class="btn-sm primary" href="{{ url_for('audit.index') }}">Open audit trail</a></div>
+  <p class="muted small">Search, verify and download the tamper-evident record of sign-ins, account and role
+    changes, quota and configuration changes, access decisions, entitlement changes and workflow steps.</p>
+</section>
 {% endblock %}

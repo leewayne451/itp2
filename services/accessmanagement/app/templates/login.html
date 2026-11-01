@@ -9,12 +9,10 @@
   <h1>ServiceJourney</h1>
   <p class="subtitle">Workflow console</p>
   {% include "_flashes.html" %}
-  <form method="post" action="{{ url_for('auth.login') }}">
-    <label>Username <input name="username" autocomplete="username" required autofocus></label>
-    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
-    <button type="submit" class="primary">Sign in</button>
-  </form>
-  <p class="hint">Demo (user = pass): <code>req</code>, <code>hr</code>, <code>director</code>,
-    <code>aa</code>, <code>itadmin</code>, <code>euss</code>, <code>admin</code></p>
+  {% if signed_out %}<div class="flash ok">You have been signed out of every ServiceJourney app.</div>{% endif %}
+  <a class="btn-sso primary" href="{{ url_for('auth.login') }}" data-testid="sso-signin">Sign in with ServiceJourney SSO</a>
+  <p class="hint">One sign-in for the console, Personal Laptop and Account (Keycloak).<br>
+    Demo accounts start with a <strong>temporary</strong> password equal to the username — you will be asked to
+    choose your own. Staff accounts also set up two-factor authentication (TOTP) on first sign-in.</p>
 </main>
 {% endblock %}

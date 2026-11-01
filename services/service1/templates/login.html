@@ -9,15 +9,12 @@
 <body>
   <main class="card">
     <div class="logo">{{ service_name }}</div>
-    <p class="subtitle">Please sign in to continue</p>
+    <p class="subtitle">Sign in to continue</p>
     {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
     {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-    <form method="post" action="{{ url_for('login') }}">
-      <label>Username <input name="username" required autofocus autocomplete="username"></label>
-      <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
-      <button type="submit">Sign in</button>
-    </form>
-    <p class="hint">Try <code>alice</code>/<code>alice</code> or <code>bob</code>/<code>bob</code></p>
+    <a class="btn sso" href="{{ url_for('login') }}" data-testid="sso-signin">Sign in with ServiceJourney SSO</a>
+    <p class="hint">One sign-in for every ServiceJourney app. If you are already signed in to the console,
+      you will be let straight in.</p>
   </main>
 </body>
 </html>

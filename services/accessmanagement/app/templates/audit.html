@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Audit trail{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><h2>Audit trail</h2>
+    <form method="post" action="{{ url_for('audit.verify') }}" class="inline-form">
+      <button class="btn-sm" type="submit" title="Re-check every entry's hash chain">Verify integrity</button>
+    </form>
+  </div>
+  <p class="muted small">Every sign-in, account change, quota or configuration change, access decision,
+    entitlement change, workflow step and asset hand-over — append-only and hash-chained. Entries cannot be
+    edited or deleted by anyone through the application, and any change made directly in the database is
+    detected by <em>Verify integrity</em>.</p>
+
+  {% if report %}
+  <div class="flash {{ 'ok' if report.ok else 'error' }}" data-testid="verify-result">
+    {% if report.ok %}
+      Integrity verified: all {{ report.entries }} entries are intact and correctly chained
+      (head #{{ report.head_seq }}, <code class="hash">{{ report.head_hash[:16] }}…</code>).
+      {% if report.missing_in_file_copy %}{{ report.missing_in_file_copy }} entr{{ 'y is' if report.missing_in_file_copy == 1 else 'ies are' }} missing from the file copy.{% endif %}
+    {% else %}
+      TAMPERING DETECTED — {{ report.problems|length }} problem(s):
+      <ul>{% for p in report.problems %}<li>#{{ p.seq }}: {{ p.problem }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="get" action="{{ url_for('audit.index') }}" class="stack-form inline-grid audit-filters">
+    <label>Category
+      <select name="category">
+        <option value="">All</option>
+        {% for c in data.categories %}<option value="{{ c }}" {{ 'selected' if filters.category == c }}>{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Outcome
+      <select name="outcome">
+        <option value="">All</option>
+        {% for o in ('success', 'failure', 'denied') %}<option value="{{ o }}" {{ 'selected' if filters.outcome == o }}>{{ o }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Action <input name="action" value="{{ filters.action or '' }}" placeholder="e.g. login_failed"></label>
+    <label>Actor <input name="actor" value="{{ filters.actor or '' }}" placeholder="username"></label>
+    <label>Target <input name="target" value="{{ filters.target or '' }}" placeholder="user, request, asset…"></label>
+    <label>Text <input name="q" value="{{ filters.q or '' }}" placeholder="search details"></label>
+    <label>From <input name="since" type="date" value="{{ filters.since or '' }}"></label>
+    <label>To <input name="until" type="date" value="{{ filters.until or '' }}"></label>
+    <button class="primary" type="submit">Filter</button>
+  </form>
+
+  <div class="audit-bar">
+    <span class="muted small">{{ data.total }} entr{{ 'y' if data.total == 1 else 'ies' }}{% if filters %} match the filters{% endif %}.</span>
+    <span class="row-actions">
+      <a class="btn-sm" href="{{ url_for('audit.export', format='csv', **filters) }}">Download CSV</a>
+      <a class="btn-sm" href="{{ url_for('audit.export', format='jsonl', **filters) }}"
+         title="Signed entries with their hashes — can be re-verified later">Download JSONL (signed)</a>
+    </span>
+  </div>
+
+  <div class="table-wrap">
+    <table data-testid="audit-table">
+      <thead><tr><th>#</th><th>When (SGT)</th><th>Category</th><th>Action</th><th>Actor</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
+      <tbody>
+        {% for e in data.entries %}
+        <tr>
+          <td class="small">{{ e.seq }}</td>
+          <td class="small nowrap">{{ e.ts | dts }}</td>
+          <td><span class="type-tag cat-{{ e.category }}">{{ e.category }}</span></td>
+          <td><span class="pill {{ 'ok' if e.outcome == 'success' else 'bad' }}">{{ e.action | replace('_', ' ') }}</span></td>
+          <td class="small">{% if e.actor.username %}<code>{{ e.actor.username }}</code>{% if e.actor.role %} <span class="muted">{{ e.actor.role }}</span>{% endif %}{% else %}—{% endif %}</td>
+          <td class="small">{{ e.target.label or e.target.id or "—" }}{% if e.target.type %} <span class="muted">({{ e.target.type }})</span>{% endif %}</td>
+          <td class="small details">{% for k, v in e.details.items() if v not in (None, "", [], {}) and k not in ("keycloak_event_id", "auth_flow") %}<div><span class="muted">{{ k }}:</span> {{ v if v is string or v is number else (v | tojson) }}</div>{% endfor %}</td>
+          <td class="small">{{ e.ip or "" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="muted small">No entries.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if data.page > 1 %}<a class="btn-sm" href="{{ url_for('audit.index', page=data.page - 1, **filters) }}">‹ Newer</a>{% endif %}
+    <span class="muted small">Page {{ data.page }} of {{ pages }}</span>
+    {% if data.page < pages %}<a class="btn-sm" href="{{ url_for('audit.index', page=data.page + 1, **filters) }}">Older ›</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -3,13 +3,20 @@
 # Containers:
 #   postgres          — SQL database (official image, no source)
 #   backend           — Flask API + source of truth (services/backend)
-#   accessmanagement  — admin console: login + dashboard (services/accessmanagement)
+#   keycloak          — single sign-on identity provider (OIDC; passwords, TOTP, sessions)
+#   keycloak-db       — Keycloak's own database (official image)
+#   accessmanagement  — admin console (services/accessmanagement)
 #   service1          — demo protected service (services/service1)
 #   service2          — demo protected service (services/service2)
+#   email             — mailbox + SMTP relay (services/email)
 #
-# Only the backend talks to Postgres. The three frontends talk to the backend
-# over the internal 'appnet' network; browsers reach the frontends via the
-# published host ports below.
+# Secrets (database passwords, signing keys, client secrets, Keycloak admin) are
+# NOT in this file: they come from the git-ignored .env, created/completed with
+#     python scripts/generate_secrets.py
+#
+# Sign-in for every app goes through Keycloak (https://localhost:8443). Only the
+# backend talks to the app database. The three frontends talk to the backend
+# over the internal 'appnet' network; browsers reach them via the host ports below.
 
 services:
   postgres:
@@ -17,7 +24,7 @@ services:
     environment:
       POSTGRES_DB: accessmgmt
       POSTGRES_USER: accessmgmt
-      POSTGRES_PASSWORD: accessmgmt
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python scripts/generate_secrets.py}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -31,14 +38,37 @@ services:
     build: ./services/backend
     volumes:
       - ./certs:/certs:ro
+      - auditlog:/var/log/servicejourney   # audit trail file copy (backend-only volume)
     environment:
       PGHOST: postgres
       PGPORT: "5432"
       PGDATABASE: accessmgmt
       PGUSER: accessmgmt
-      PGPASSWORD: accessmgmt
-      SECRET_KEY: poc-backend-secret-change-me
+      PGPASSWORD: ${POSTGRES_PASSWORD:?run python scripts/generate_secrets.py}
+      # Least-privilege runtime DB role: SELECT + INSERT only on audit_log.
+      APP_DB_USER: sj_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run python scripts/generate_secrets.py}
+      # Audit trail: HMAC key sealing the hash chain, and the append-only file copy.
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?run python scripts/generate_secrets.py}
+      AUDIT_LOG_DIR: /var/log/servicejourney
       EMAIL_URL: https://email:5000
+      # Singapore time: database sessions (CURRENT_DATE for the rotation clock, how a typed
+      # appointment time is read, audit date filters) and Python's local date. Timestamps
+      # are still STORED as UTC-based timestamptz; the audit hash chain is unchanged.
+      PGTZ: Asia/Singapore
+      TZ: SGT-8
+      # Single sign-on: tokens are issued by Keycloak's PUBLIC URL; the backend reaches
+      # it on the internal name, with its own service account (user sync + events).
+      KEYCLOAK_URL: https://keycloak:8443
+      KEYCLOAK_PUBLIC_URL: https://localhost:8443
+      KEYCLOAK_BACKEND_CLIENT_SECRET: ${KEYCLOAK_BACKEND_CLIENT_SECRET:?run python scripts/generate_secrets.py}
+      # First-party clients allowed to call the API (service-to-service auth).
+      API_CLIENTS: console=${CONSOLE_CLIENT_SECRET:?run python scripts/generate_secrets.py},service1=${SERVICE1_CLIENT_SECRET:?run python scripts/generate_secrets.py},service2=${SERVICE2_CLIENT_SECRET:?run python scripts/generate_secrets.py}
+      # Roles listed here are put in Keycloak's "staff" group, whose sign-in REQUIRES
+      # TOTP (set up at first sign-in). Others may opt in from their account page.
+      MFA_REQUIRED_ROLES: ${MFA_REQUIRED_ROLES:-admin,requestor,hr,director,aa,it_admin,euss}
+      # Only used to migrate TOTP enrolments made before Keycloak (CHANGE 001-003).
+      MFA_ENC_KEY: ${MFA_ENC_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,18 +80,78 @@ services:
     build: ./services/email
     volumes:
       - ./certs:/certs:ro
+      - mailbox:/data            # the mailbox survives the container being rebuilt / recreated
     environment:
+      MAILBOX_FILE: /data/mailbox.json
       # Real delivery is optional. Put these in a .env file next to this compose
       # file (see .env.example). Leave blank and the service just records messages
-      # in its local mailbox at http://localhost:8090 without sending anything.
+      # in its local mailbox at https://localhost:8090 without sending anything.
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_TLS: ${SMTP_TLS:-true}
-    # ports:
-      # - "8090:5000"   # mailbox web page
+      SMTP_LISTEN_PORT: "1025"   # Keycloak relays its account e-mails here (internal network only)
+    ports:
+      # Mailbox web page (https://localhost:8090) for the demo: the MJR alerts, request
+      # notifications and Keycloak e-mails land here. Bound to 127.0.0.1 ONLY, because the
+      # mailbox shows password-reset links and has no sign-in: never publish it on 0.0.0.0.
+      - "127.0.0.1:8090:5000"
+    networks: [appnet]
+
+  keycloak-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run python scripts/generate_secrets.py}
+    volumes:
+      - kcdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [appnet]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.2
+    # --import-realm loads keycloak/import/*.json on FIRST start only (an existing
+    # realm is left untouched): after editing the realm file, reset with
+    # `docker compose down -v`.
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run python scripts/generate_secrets.py}
+      # Browsers use https://localhost:8443 (also the token issuer); containers call
+      # https://keycloak:8443, which backchannel-dynamic allows for back-end endpoints.
+      KC_HOSTNAME: https://localhost:8443
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_CERTIFICATE_FILE: /certs/server.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/server.key
+      KC_TRUSTSTORE_PATHS: /certs/ca.crt          # trust our CA for back-channel logout calls
+      KC_HEALTH_ENABLED: "true"
+      # Temporary bootstrap admin for the Keycloak admin console (master realm).
+      KC_BOOTSTRAP_ADMIN_USERNAME: kcadmin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run python scripts/generate_secrets.py}
+      # Substituted into the realm file at import (client secrets never live in git).
+      OIDC_CONSOLE_SECRET: ${OIDC_CONSOLE_SECRET:?run python scripts/generate_secrets.py}
+      OIDC_SERVICE1_SECRET: ${OIDC_SERVICE1_SECRET:?run python scripts/generate_secrets.py}
+      OIDC_SERVICE2_SECRET: ${OIDC_SERVICE2_SECRET:?run python scripts/generate_secrets.py}
+      KEYCLOAK_BACKEND_CLIENT_SECRET: ${KEYCLOAK_BACKEND_CLIENT_SECRET:?run python scripts/generate_secrets.py}
+    volumes:
+      - ./certs:/certs:ro
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+      - ./keycloak/password-blacklists:/opt/keycloak/data/password-blacklists:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    ports:
+      - "8443:8443"
     networks: [appnet]
 
   accessmanagement:
@@ -70,7 +160,14 @@ services:
       - ./certs:/certs:ro
     environment:
       BACKEND_URL: https://backend:5000
-      SECRET_KEY: poc-accessmgmt-secret-change-me
+      SECRET_KEY: ${CONSOLE_SECRET_KEY:?run python scripts/generate_secrets.py}
+      CLIENT_ID: console
+      CLIENT_SECRET: ${CONSOLE_CLIENT_SECRET:?run python scripts/generate_secrets.py}
+      # Single sign-on (OpenID Connect client registered in Keycloak).
+      OIDC_CLIENT_SECRET: ${OIDC_CONSOLE_SECRET:?run python scripts/generate_secrets.py}
+      APP_URL: https://localhost:8080
+      KEYCLOAK_URL: https://keycloak:8443
+      KEYCLOAK_PUBLIC_URL: https://localhost:8443
     depends_on: [backend]
     ports:
       - "8080:8080"
@@ -84,7 +181,14 @@ services:
       BACKEND_URL: https://backend:5000
       SERVICE_KEY: service1
       SERVICE_NAME: Personal Laptop
-      SECRET_KEY: poc-service1-secret-change-me
+      SECRET_KEY: ${SERVICE1_SECRET_KEY:?run python scripts/generate_secrets.py}
+      CLIENT_ID: service1
+      CLIENT_SECRET: ${SERVICE1_CLIENT_SECRET:?run python scripts/generate_secrets.py}
+      # Single sign-on (OpenID Connect client registered in Keycloak).
+      OIDC_CLIENT_SECRET: ${OIDC_SERVICE1_SECRET:?run python scripts/generate_secrets.py}
+      APP_URL: https://localhost:8081
+      KEYCLOAK_URL: https://keycloak:8443
+      KEYCLOAK_PUBLIC_URL: https://localhost:8443
     depends_on: [backend]
     ports:
       - "8081:8080"
@@ -98,7 +202,14 @@ services:
       BACKEND_URL: https://backend:5000
       SERVICE_KEY: service2
       SERVICE_NAME: Account
-      SECRET_KEY: poc-service2-secret-change-me
+      SECRET_KEY: ${SERVICE2_SECRET_KEY:?run python scripts/generate_secrets.py}
+      CLIENT_ID: service2
+      CLIENT_SECRET: ${SERVICE2_CLIENT_SECRET:?run python scripts/generate_secrets.py}
+      # Single sign-on (OpenID Connect client registered in Keycloak).
+      OIDC_CLIENT_SECRET: ${OIDC_SERVICE2_SECRET:?run python scripts/generate_secrets.py}
+      APP_URL: https://localhost:8082
+      KEYCLOAK_URL: https://keycloak:8443
+      KEYCLOAK_PUBLIC_URL: https://localhost:8443
     depends_on: [backend]
     ports:
       - "8082:8080"
@@ -106,6 +217,9 @@ services:
 
 volumes:
   pgdata:
+  auditlog:
+  kcdata:
+  mailbox:
 
 networks:
   appnet:

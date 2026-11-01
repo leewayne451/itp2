@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Set up two-factor authentication{% endblock %}
+{% block body_class %}{{ 'auth' if layout == 'auth' }}{% endblock %}
+{% block body %}
+  {% if layout == 'auth' %}
+  <main class="login-card wide">
+    <h1>Set up two-factor authentication</h1>
+    {% include "_flashes.html" %}
+    {% include "_mfa_setup_body.html" %}
+  </main>
+  {% else %}{{ super() }}{% endif %}
+{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <div class="panel-head"><h2>Set up two-factor authentication</h2></div>
+  {% include "_mfa_setup_body.html" %}
+</section>
+{% endblock %}

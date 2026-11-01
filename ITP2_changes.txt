@@ -1,0 +1,790 @@
+ITP2 — ServiceJourney (AccessManagement_poc) CHANGE LOG
+=======================================================
+Every change made to the codebase is recorded here: when, what, which files,
+and how it was verified. Newest entry at the top. Times are Singapore (SGT, UTC+8).
+
+
+-------------------------------------------------------------------------------
+[2026-11-01 21:55 SGT]  CHANGE 006 follow-up 3 — MJR e-mails missing from the mailbox
+-------------------------------------------------------------------------------
+Cause
+  The MJR alert for alice and frank was sent at 21:10 SGT (audit: rotation_due_notified)
+  and both were marked rotation_alerted_at. At 21:24 the email container was recreated
+  (`docker compose up -d --build ... email` for follow-up 2). Its mailbox lived only in
+  memory, so the messages vanished, and since the officers were already marked alerted
+  the tracker (correctly, one alert per cycle) never sent them again.
+  Second weakness found: mailer.send_email() swallowed every error, so if the email
+  service were down the officers would still be marked alerted and the alert lost.
+
+What changed
+  services/email/app.py        mailbox saved to MAILBOX_FILE (JSON, atomic write, lock shared
+                               with the SMTP listener thread) and reloaded at start-up
+  docker-compose.yml           email: new named volume `mailbox:/data`, MAILBOX_FILE=/data/mailbox.json
+  services/backend/app/mailer.py   send_email() returns True/False and logs when the email
+                               service is unreachable. A read timeout counts as accepted: with
+                               real SMTP (Gmail) configured the email service takes > 3 s to relay,
+                               but it has the message and records it.
+  services/backend/app/rotation.py check_due(): if no Director's e-mail was accepted, officers are
+                               NOT marked alerted and nothing is audited, so the next check retries.
+  Snapshot: Claude outputs/pre_mailbox_fix_snapshot.tgz
+
+Actions on the running stack
+  Rebuilt backend + email. Re-sent the alert with rotation.check_due(force=True): Director and
+  HR copies in the mailbox (and relayed via smtp.gmail.com), alice/frank re-marked 21:50 SGT.
+  (A first forced run before the timeout fix also sent, so the mailbox holds 2 copies of each.)
+
+Verification
+  - Mailbox at https://localhost:8090 lists the MJR messages.
+  - `docker compose up -d --force-recreate email` -> "loaded 4 message(s)"; all 4 still listed.
+  - Email container stopped, check_due(force=True) -> 0 notified, rotation_alerted_at unchanged,
+    "[mjr] alert e-mail not delivered to any Director; will retry". Container restarted.
+  Note: `docker compose down -v` still wipes the mailbox (it is a volume like the others).
+
+
+-------------------------------------------------------------------------------
+[2026-11-01 21:50 SGT]  FIX — itadmin "cannot sign in" after password reset (no code change)
+-------------------------------------------------------------------------------
+Summary
+  After resetting itadmin's password as kcadmin, every itadmin sign-in attempt was typed
+  into the Keycloak ADMIN login page (realm "master", client security-admin-console), not
+  the ServiceJourney login. itadmin only exists in realm "servicejourney", so Keycloak
+  answered user_not_found ("Invalid username or password"). Pattern in the Keycloak log
+  21:35-21:40: sign out of the admin console -> try itadmin there -> fail -> sign back in as
+  kcadmin -> reset again. None of the attempts reached the servicejourney realm.
+
+Checked and ruled out
+  - Realm: the resets WERE made in servicejourney (admin events users/62dd.../reset-password).
+  - Account: enabled, not brute-force locked (0 failures), password credential updated 21:39:58.
+  - Password policy: one reset (21:39:43) was rejected by passwordHistory(3) (reused password);
+    the next one was accepted.
+  - Required actions: UPDATE_PASSWORD (temporary password) — expected. TOTP already
+    configured ("Main Host" authenticator), so a code is asked, not a new QR set-up.
+  - Backend: employee 1 is active. tokens_revoked_after = 21:39:58 (the reset, CHANGE 005);
+    that only refuses tokens issued BEFORE the reset, so a new sign-in is not blocked.
+
+Change (runtime Keycloak config, master realm — not in git, lost on `down -v`)
+  master realm displayName -> "Keycloak administration", with a note on its login page:
+  "Administrator account (kcadmin) only. ServiceJourney staff such as itadmin sign in at
+  https://localhost:8080". Undo: set displayName back to "Keycloak" in Realm settings.
+
+Verification
+  - Admin login page now shows the new title and note (curl of the master auth endpoint).
+  - https://localhost:8080/login still redirects to the "Sign in to ServiceJourney" page.
+
+
+-------------------------------------------------------------------------------
+[2026-11-01 21:25 SGT]  CHANGE 006 follow-up 2 — Show times in Singapore time (SGT)
+-------------------------------------------------------------------------------
+Summary
+  The mailbox showed 13:10 for an e-mail sent at 21:10 SGT: every container runs in UTC.
+  All times shown to users are now Singapore time (UTC+8). Storage is unchanged: the
+  database keeps timestamptz, and the audit trail's hashed payload stays in UTC, so
+  existing entries still verify.
+
+What changed
+  services/email/app.py                         mailbox "received at" time in SGT
+  services/accessmanagement/app/labels.py       SGT constant; the `dt` filter converts to SGT
+                                                (request timelines, history, appointments,
+                                                asset history, rotation decisions); new `dts`
+                                                filter (with seconds)
+  services/accessmanagement/app/templates/audit.html   "When (SGT)" column, converted
+  services/accessmanagement/app/views/security.py      sign-in time shown in SGT
+  services/accessmanagement/app/templates/dashboard/requestor.html
+                                                MJR justification date in SGT
+  docker-compose.yml   backend: PGTZ=Asia/Singapore (DB session time zone: CURRENT_DATE for the
+                       rotation clock, typed appointment times read as SGT, audit From/To date
+                       filters) and TZ=SGT-8 (Python's local date for the rotation check)
+  README.md            audit trail note
+  Snapshot: Claude outputs/pre_sgt_snapshot.tgz
+
+Note
+  Appointments booked BEFORE this change were read as UTC, so they now display 8 hours later
+  than typed. New bookings are correct.
+
+Verification
+  Changed Python files compile; dt filter: 2026-11-01T13:10:05+00:00 -> 2026-11-01 21:10;
+  docker-compose.yml parses with the new backend variables. Not run on Docker from here.
+
+Action needed
+  docker compose up -d --build backend accessmanagement email
+-------------------------------------------------------------------------------
+[2026-11-01 21:10 SGT]  CHANGE 006 follow-up — Publish the mailbox on localhost:8090
+-------------------------------------------------------------------------------
+Summary
+  The CHANGE 006 demo (and the README) send you to the mailbox at port 8090, but the
+  email container's port was commented out in docker-compose.yml, so nothing was
+  published. The mailbox web page is now published, on the loopback interface only.
+
+What changed
+  docker-compose.yml   email service: ports "127.0.0.1:8090:5000" (the container's Flask
+                       app listens on 5000, over HTTPS with the project certificate).
+                       127.0.0.1 only: the mailbox has no sign-in and shows password-reset
+                       links, so it must not be reachable from other machines.
+  README.md            E-mails note (port now published, localhost only), mailbox URLs now
+                       https://localhost:8090, journey step 8 link.
+  Backup: Claude outputs/pre_change006_followup_docker-compose.yml
+
+Action needed
+  docker compose up -d email      (recreates only the email container with the port)
+  then open https://localhost:8090
+
+Verification
+  docker-compose.yml parses; email service ports = ["127.0.0.1:8090:5000"]; app.py runs
+  on port 5000 with the mounted certificate. Not run on Docker from here.
+
+Deployed [2026-11-01 21:10 SGT]
+  docker compose up -d --build backend accessmanagement email, then docker compose up -d
+  (keycloak, keycloak-db, service1, service2 had been stopped). Docker now shows
+  email 127.0.0.1:8090->5000; https://localhost:8090 returns 200.
+  The start-up MJR alert had fired at 21:01 into the OLD email container, whose in-memory
+  mailbox was lost on recreate, so it was re-sent with rotation.check_due(force=True):
+  director + HR copy, alice and frank listed, both shown in the mailbox.
+  Note: real SMTP delivery is ON in .env, so these also went out via smtp.gmail.com.
+-------------------------------------------------------------------------------
+[2026-11-01 20:45 SGT]  CHANGE 006 — Mandatory Job Rotation (MJR) tracker
+-------------------------------------------------------------------------------
+Summary
+  Implements HR pain point "10) Mandatory Job Rotation" from the MND HR process review:
+  HR no longer tracks each officer's rotation timeline by hand or drafts e-mails to
+  Directors. The backend knows when each officer joined their department, flags them at
+  the 4-year mark, e-mails the Directors, and records the Director's decision. "Rotate"
+  hands the Requestor a pre-filled department shift request, so the move AND the change
+  of access go through the existing approval workflow; the clock restarts when IT
+  processes the shift. "Keep" needs a reason and comes back for review in 12 months.
+
+How it works
+  - employees.department_since: set when an onboard / shift is processed by IT, when an
+    administrator moves someone directly, or corrected by the administrator by hand.
+  - States: ok (within term) -> due_soon (90 days before) -> due -> kept (until review date,
+    then due again) | rotation_planned -> shift_in_progress -> ok in the new department.
+    A rejected shift puts the officer back to due.
+  - Background loop (same thread as the Keycloak sync): hourly, and once at start-up, e-mails
+    Directors (copy to HR) one summary of officers newly due; each officer once per cycle
+    (employees.rotation_alerted_at). HR can also run it from the console.
+  - Decisions in rotation_decisions (keep / rotate, reason, destination, review date,
+    linked shift request). A shift request may carry rotation_decision_id; it is checked
+    (right employee, current tenure, not already used) BEFORE anything is changed.
+  - Audit (category workflow): rotation_due_notified, rotation_keep, rotation_rotate; the
+    shift request's history notes "Mandatory Job Rotation, confirmed by Director";
+    administrator date corrections appear in account_updated (old -> new).
+  - Console: Director dashboard "Due for rotation" (Rotate / Keep) + "Rotation tracker";
+    HR dashboard same lists read-only + "Check now & e-mail Directors"; Requestor dashboard
+    "Rotations to raise" (pre-filled shift request); Administrator employee row "since" date.
+  - Demo seed (relative to today, only fills empty values): alice 5y3m and frank 4y2m are
+    due, grace 3y10m due soon, the rest within term. Existing databases: employees already
+    in a department start from their last completed onboard / shift into it, else today.
+  - Tunables (optional backend env): MJR_ROTATION_YEARS=4, MJR_DUE_SOON_DAYS=90,
+    MJR_KEEP_REVIEW_MONTHS=12, MJR_CHECK_INTERVAL_SECONDS=3600.
+
+Files ADDED
+  services/backend/app/rotation.py                  due logic, e-mails, decisions, shift link
+  services/backend/app/api/rotations.py             GET /api/rotations, POST .../decision,
+                                                    GET /api/rotations/planned, POST /api/rotations/check
+  services/accessmanagement/app/views/rotations.py  Rotate / Keep / Check now (POST -> redirect)
+
+Files MODIFIED
+  services/backend/app/sql/schema.sql       + employees.department_since, rotation_alerted_at;
+                                            + table rotation_decisions (idempotent)
+  services/backend/app/sql/seed.sql         demo tenures + backfill for existing databases
+  services/backend/app/__init__.py          registers the rotations blueprint
+  services/backend/app/sync.py              background loop also runs the hourly MJR check
+  services/backend/app/api/requests.py      shift accepts rotation_decision_id; processing an
+                                            onboard / shift restarts the rotation clock
+  services/backend/app/api/admin.py         department_since editable (validated, audited);
+                                            direct department move restarts the clock
+  services/backend/app/api/reference.py     /api/employees includes department_since
+  services/accessmanagement/app/__init__.py registers the rotations blueprint
+  services/accessmanagement/app/labels.py   rotation state labels / colours
+  services/accessmanagement/app/views/dashboard.py   rotation data for Director, HR, Requestor
+  services/accessmanagement/app/views/requests.py    passes rotation_decision_id on a shift
+  services/accessmanagement/app/views/admin.py       sends the date only when it was changed
+  services/accessmanagement/app/templates/dashboard/approver.html   Due for rotation + tracker
+  services/accessmanagement/app/templates/dashboard/requestor.html  Rotations to raise
+  services/accessmanagement/app/templates/dashboard/admin.html      "since" date field
+  README.md                                 new "Mandatory Job Rotation (MJR) tracker" section,
+                                            journey step 8, API table, project structure
+
+Snapshot before the change: Claude outputs/pre_change006_snapshot.tgz
+
+Verification (PostgreSQL 16; Keycloak and e-mail stubbed; not yet on the Docker stack)
+  - Backend: 54/54 PASS on a database first created by the CHANGE 005 code (upgrade path),
+    bootstrap run twice (idempotent): seeded tenures, upgrade backfill from a 2020 onboarding,
+    due / due soon / within term, role checks (director decides; hr reads; requestor, aa,
+    employee refused), one alert e-mail to Director + HR copy and no repeat, throttle, keep
+    (reason required, 12-month review, HR e-mail), rotate (department required, not own),
+    Requestor e-mail + planned list, decision cannot be used for another employee (and that
+    employee is NOT suspended), linked shift through HR -> Director -> AA -> IT, clock
+    restarted and access switched to the new department's template, rejected shift -> due
+    again -> decide again, keep period ending -> due + new alert, admin date validation /
+    audit / direct move, audit chain verifies.
+  - Fresh database with the least-privilege runtime role (sj_app): schema + seed, decision
+    and alert work (grants cover the new table and sequence).
+  - Console (Flask test client against the running backend): 20/20 PASS — Director / HR /
+    Requestor / Administrator pages render; Rotate and Keep forms; HR check now; HR cannot
+    decide; AA dashboard unchanged; pre-filled shift request submitted from "Rotations to
+    raise"; tracker shows "Shift in progress" with the request link; admin date edit.
+  - Screenshots of the Director and Requestor dashboards checked (Chromium).
+  - NOT yet run: the full Docker stack with Keycloak (scripts/test_sso.py). Run it after
+    `docker compose up -d --build`.
+
+Action needed (on your PC, in the project folder)
+  docker compose up -d --build backend accessmanagement
+  (schema changes apply automatically at backend start; no new secrets, no `down -v`.)
+
+Known limitations
+  - No reporting lines in the POC: every Director sees and may decide for every officer, and
+    all Directors receive the alert.
+  - The 4-year clock counts calendar time in the department; it does not pause for leave or
+    secondment.
+  - Alerts are best-effort e-mails like the rest of the system (not retried if the mail
+    service is down; the console lists always show who is due).
+-------------------------------------------------------------------------------
+[2026-11-01 15:30 SGT]  CHANGE 005 — Close token / session revocation gaps after SSO
+-------------------------------------------------------------------------------
+Summary
+  Review of CHANGE 004 against the "self-contained JWT" trade-off (tokens validated locally
+  keep working while Keycloak is down, but cannot be cancelled early) found four gaps. All
+  four are closed; the outage behaviour (backend keeps validating with cached keys,
+  signed-in service users carry on) is deliberately kept.
+
+Gaps and fixes
+  1. A user disabled / signed out DIRECTLY in the Keycloak admin console (not via the
+     ServiceJourney console) kept API access for up to 5 min, and Service1/2 sessions never
+     ended (they only checked the backend DB, which still said "active").
+     -> backend [kc_events.py]: Keycloak admin events that disable, delete or sign out a
+        user, or reset / remove a credential, set employees.tokens_revoked_after to the
+        event time (within ~10 s, one background cycle).
+     -> services: every 60 s the session's refresh token is presented to Keycloak; a
+        refusal ends the session. Keycloak unreachable = fail open (outage-tolerant).
+  2. Service1/2 had no absolute session limit, and the 5-second status poll kept renewing
+     the 30-min idle cookie, so a session could outlive the 8 h SSO maximum (Keycloak does
+     not send back-channel logout when a session merely expires).
+     -> services: idle 30 min counted from real page views only; absolute 8 h from sign-in;
+        plus the Keycloak check above.
+  3. Revoked Keycloak session ids were kept in memory while the session lived in the signed
+     client cookie, so after a service restart a remotely signed-out cookie worked again.
+     -> services: sessions now live server-side (cookie = random handle, like the console);
+        a restart ends them, back-channel logout removes them.
+  4. During a Keycloak outage, forced sign-out and password / 2FA reset failed before the
+     backend-side revocation ran, and a role change / deactivation "sign out everywhere"
+     was not retried.
+     -> backend: tokens_revoked_after is set FIRST; forced sign-out queues the Keycloak
+        logout (new employees.kc_logout_pending, retried every 10 s) and reports
+        keycloak_synced=false; push(end_sessions=True) queues it too.
+     -> /api/service/access accepts session_issued_at and answers reason "signed_out" for a
+        service session older than tokens_revoked_after, so forced sign-outs reach
+        Service1/2 even while Keycloak is down.
+
+Files MODIFIED
+  services/backend/app/sql/schema.sql       + employees.kc_logout_pending (idempotent ALTER)
+  services/backend/app/sync.py              revoke_tokens(at=) never moves backwards; request_logout()
+  services/backend/app/kc_events.py         revocation on Keycloak admin events
+  services/backend/app/api/admin.py         revoke first; forced sign-out queued when Keycloak is down
+  services/backend/app/api/auth.py          /api/service/access: session_issued_at -> "signed_out"
+  services/accessmanagement/app/oidc.py,
+  services/service1/oidc.py, services/service2/oidc.py
+                                            OIDCError.unreachable (network error / 5xx vs refusal)
+  services/accessmanagement/app/views/admin.py   sign-out message (was "Signed out 0 session(s)")
+  services/accessmanagement/app/views/auth.py    docstring: no back-channel call on expiry
+  services/service1/app.py, services/service2/app.py
+                                            server-side sessions, idle / absolute limits, Keycloak check
+  README.md                                 "Changes apply at once", "Live session termination"
+Snapshot before the change: Claude outputs/pre_change005_snapshot.tgz
+
+Verification
+  - All changed Python files compile.
+  - Service session logic (Flask test client, Keycloak + backend mocked): 10/10 — fresh session,
+    refresh-token rotation, Keycloak down = fail open (no retry storm), Keycloak refusal ends
+    session, idle by poll ends / page view resets, 8 h absolute, back-channel logout, restart,
+    backend "signed_out".
+  - Keycloak admin-event mapping: disable / logout / reset-password / credential removal /
+    delete revoke; rename, group change, lock-out clear do not.
+  - SQL on PostgreSQL 16: new column ALTER is idempotent; revocation cut-off at event time,
+    never moved back by an older event; EXTRACT(EPOCH) read-back.
+  - NOT yet run: the full stack (scripts/test_sso.py). Run it after `docker compose up -d --build`.
+
+Known limitations
+  - Changes made directly in Keycloak are still not written back to the employee record:
+    the backend remains the source of truth, so a later edit of that employee in the console
+    re-enables a user who was disabled only in Keycloak.
+  - Signing out a single session in Keycloak (Sessions tab) relies on back-channel logout
+    only; the backend still accepts that session's access token until it expires (<= 5 min).
+  - Console behaviour in an outage is unchanged: it needs Keycloak to refresh its token.
+
+
+-------------------------------------------------------------------------------
+[2026-11-01 14:40 SGT]  OPS NOTE — demo account passwords reset (data only, no code change)
+-------------------------------------------------------------------------------
+Summary
+  After CHANGE 004 was deployed (existing volumes kept, 19 accounts migrated into Keycloak),
+  scripts/test_sso.py gave the demo accounts it uses random passwords and test authenticators.
+  To make them usable again they were reset through the Keycloak admin API.
+
+What changed (Keycloak realm "servicejourney", user data only)
+  admin, req, hr, director, aa, itadmin, euss, alice, bob, charlie
+    - authenticator (OTP) removed, brute-force lock-out cleared
+    - temporary password set to  Demo-Reset-2026  (must be changed at first sign-in;
+      staff must also set up an authenticator again)
+  dave, erin, frank, grace, henry, ivy, jack, kate, liam
+    - untouched: still the migrated temporary password = username
+
+Why not password = username for the reset accounts
+  Keycloak's realm password policy (12+ characters, must not contain the username) rejects
+  it for admin-set passwords. Only migrated legacy hashes keep the old seed value.
+  Lifting the policy was not done, to keep the security posture of CHANGE 004 intact.
+
+Note
+  Running scripts/test_sso.py again re-randomises these accounts; repeat this reset afterwards
+  (Keycloak admin console -> Users -> Credentials -> Reset password, Temporary on).
+
+
+-------------------------------------------------------------------------------
+[2026-11-01 13:40 SGT]  CHANGE 004 — Keycloak single sign-on (SSO)
+-------------------------------------------------------------------------------
+Summary
+  All sign-in now goes through Keycloak 26.4.2 (OpenID Connect). One sign-in — password,
+  plus a Google Authenticator (TOTP) code for staff — opens the console, the Personal
+  Laptop service and the Account service; signing out of any one signs out of all.
+  Keycloak owns AUTHENTICATION (sign-in pages, passwords, TOTP, lock-out, sessions,
+  forgot password). The backend keeps AUTHORIZATION (roles, departments, service
+  grants), the approval workflow and the audit trail. The app's own login, MFA, password
+  and session code from CHANGE 001/002 was removed and replaced by Keycloak.
+
+New containers (docker-compose.yml)
+  keycloak     quay.io/keycloak/keycloak:26.4.2, https://localhost:8443, our TLS certificate;
+               realm imported from keycloak/import/ on FIRST start only
+  keycloak-db  postgres:16-alpine, volume kcdata
+
+Realm "servicejourney" (keycloak/import/servicejourney-realm.json)
+  - Clients: console, service1, service2 (confidential, authorization code + PKCE S256,
+    exact redirect URIs, back-channel logout URL, audience "servicejourney-api", amr claim);
+    servicejourney-backend (service account: manage/view/query users, query groups, view events).
+  - Sign-in flow: cookie OR (username + password, then a TOTP code if the user is in group
+    "staff" [realm role mfa_required] or has set up an authenticator). Staff without one
+    must set it up at first sign-in (QR code, Google Authenticator compatible).
+  - Password policy: 12-128 chars, not username / e-mail / containing username, last 3 not
+    re-used, ~180-word blocklist (keycloak/password-blacklists/, from the old blocklist).
+  - Lock-out: 5 failures -> 15 min. Sessions: idle 30 min, max 8 h; access token 5 min.
+  - Login + admin events stored (pulled into the audit trail). SMTP -> email:1025.
+  - Client secrets / backend secret are ${ENV} placeholders filled from .env.
+
+Backend
+  - Accepts Keycloak access tokens only: RS256 via JWKS (verified TLS), issuer, audience
+    servicejourney-api, typ Bearer, azp = console, expiry (30 s leeway) [tokens.py].
+  - Token subject -> employee via employees.keycloak_id; refuses inactive accounts, tokens
+    issued before employees.tokens_revoked_after (immediate effect of deactivation, role
+    change, password / MFA reset, forced sign-out), and staff tokens without "otp" in amr.
+  - Sync employees -> Keycloak users [sync.py, keycloak.py]: create / update / delete,
+    enabled <-> status (inactive, offboarded, suspended during a department shift),
+    staff role <-> group "staff"; retried every 10 s while Keycloak is down
+    (employees.kc_sync_pending). Admin actions now act in Keycloak: create (temporary
+    password, policy-checked, rolled back if refused), reset password (also lifts the
+    lock-out), MFA reset (removes the authenticator), sign out (ends Keycloak sessions).
+  - Credential migration on first start: each Argon2id password hash and each TOTP secret
+    (decrypted with MFA_ENC_KEY) is copied into Keycloak, so users keep their password AND
+    their existing authenticator app; then erased from the app DB. Audited as
+    credentials_migrated_to_keycloak. Tables user_sessions, password_reset_tokens,
+    mfa_recovery_codes dropped.
+  - Keycloak events -> tamper-evident audit trail [kc_events.py]: sign-ins, failed sign-ins
+    (with IP + app), lock-outs, password / authenticator changes, reset e-mails and completed
+    resets, sign-outs, Keycloak admin-API changes. Each event once (keycloak_ingested_events),
+    every 10 s and whenever the trail is opened / verified / exported.
+  - New: GET /api/me, POST /api/employees/{id}/mfa/reset now via Keycloak.
+    Removed: /api/login*, /api/logout, /api/mfa/*, /api/password/*, /api/sessions*.
+
+Console and services
+  - OIDC client [oidc.py, shared]: state + nonce + PKCE, ID / logout tokens signature-checked;
+    tokens kept server-side (token_store.py), refreshed automatically.
+  - /login redirects to Keycloak; /callback; /logout = RP-initiated logout; POST
+    /backchannel-logout ends the local session when the user signs out anywhere.
+  - Right after first-time TOTP set-up the console asks for one more sign-in with a code.
+  - Security page links to the Keycloak account page (change password, set up / replace
+    authenticator, device activity). Audit page hides internal event ids (still in exports).
+  - Services still ask the backend whether the signed-in user is granted that service.
+  - email service also listens for SMTP on internal port 1025 (Keycloak's e-mails go to the
+    mailbox / are relayed with the configured SMTP account).
+
+Files ADDED
+  keycloak/import/servicejourney-realm.json
+  keycloak/password-blacklists/servicejourney-blocklist.txt
+  services/backend/app/tokens.py, keycloak.py, sync.py, kc_events.py
+  services/accessmanagement/app/oidc.py, oidc_client.py, token_store.py
+  services/service1/oidc.py, services/service2/oidc.py
+  scripts/test_sso.py
+Files MODIFIED
+  docker-compose.yml, .env.example, README.md, scripts/generate_secrets.py (6 new secrets),
+  scripts/generate-certs.sh (adds DNS name "keycloak"), scripts/_e2e.py, scripts/test_audit.py
+  backend: run.py, app/__init__.py, config.py, auth.py, core.py, passwords.py,
+    api/auth.py, api/admin.py, api/reference.py, api/requests.py, api/audit.py,
+    sql/schema.sql, sql/seed.sql, requirements.txt (+PyJWT[crypto])
+  console: __init__.py, config.py, backend_client.py, labels.py, views/__init__.py,
+    views/auth.py, views/security.py, templates (base, login, security, audit, dashboards),
+    static/style.css, requirements.txt
+  service1 / service2: app.py, templates/login.html, success.html, static/style.css,
+    requirements.txt
+  email: app.py, templates/inbox.html, requirements.txt (+aiosmtpd)
+Files DELETED
+  backend: app/api/account.py, app/api/mfa.py, app/mfa.py, app/sessions.py, app/ratelimit.py,
+    app/password_blocklist.py
+  console: app/mfa_ui.py, templates/_mfa_setup_body.html, _password_fields.html,
+    forgot_password.html, reset_password.html, password_change_required.html,
+    mfa_setup.html, mfa_verify.html, mfa_recovery_codes.html
+  service1 / service2: templates/mfa.html
+  scripts/test_mfa.py, scripts/test_credentials.py (replaced by scripts/test_sso.py)
+
+Verification (local stack: Keycloak 26.4.2 + all apps, fresh databases)
+  - scripts/test_sso.py: 41/41 PASS, and again 41/41 on a second run (re-runnable) —
+    accounts in Keycloak, staff TOTP set-up + code sign-in (amr pwd+otp), employee password
+    only, SSO across console + both services, single sign-out, API refuses missing /
+    tampered / other-app / ID tokens, password policy (short, common, contains username),
+    lock-out after 5 failures, admin reset lifts it, create (weak admin password -> 400,
+    nothing half-created), promotion -> old token refused + TOTP required, deactivation,
+    MFA reset, forced sign-out, delete, forgot-password e-mail via the mailbox, shift
+    suspends / rejection re-enables, full grant workflow to completion + service access,
+    Keycloak events in the audit trail, chain verifies.
+  - scripts/test_audit.py: 13/13 PASS (docker-only DB checks skipped in the test sandbox).
+  - Extended internal test: 57/57 PASS.
+  - Migration from a CHANGE 003 database (Argon2 hashes, encrypted TOTP, audit chain):
+    7/7 PASS — old password + SAME authenticator code work in Keycloak with nothing to
+    redo, pending temporary passwords still forced, old + new audit entries verify as one chain.
+  - Browser (Chromium/Playwright): 15/15 PASS — Keycloak sign-in + code pages, dashboard,
+    Security page, Keycloak "Signing in" and "Device activity" pages, audit page, service
+    authorization still enforced, SSO into services and console, single sign-out.
+
+Action needed (on your PC, in the project folder)
+  1. python scripts/generate_secrets.py   (adds the 6 Keycloak / OIDC secrets to .env)
+  2. bash scripts/generate-certs.sh       (certificate now includes "keycloak"; re-import
+                                           certs/ca.crt as a trusted root in the browser)
+  3. docker compose down -v               (recommended clean start; without -v the existing
+                                           accounts are migrated into Keycloak instead)
+  4. docker compose up -d --build         (Keycloak needs ~30 s before sign-in works)
+  Keycloak admin console: https://localhost:8443/admin  user kcadmin, password
+  KEYCLOAK_ADMIN_PASSWORD in .env.
+
+Known limitations
+  - Realm file is imported only on Keycloak's first start: after editing it, docker compose
+    down -v (or change it in the Keycloak admin console).
+  - Console tokens and services' signed-out session list are kept in memory (single process):
+    restarting the console signs users out of it.
+  - Keycloak -> email SMTP (port 1025) is plaintext on the internal Docker network only.
+  - kcadmin is Keycloak's temporary bootstrap admin; create a permanent admin for real use.
+  - Have I Been Pwned breach check (CHANGE 002) dropped — Keycloak has no built-in
+    equivalent; the blocklist + length policy remain.
+  - MFA recovery codes (CHANGE 001) no longer exist; lost phone = administrator 2FA reset.
+  - Make account changes in the console, not directly in Keycloak (the backend re-applies
+    enabled status and staff group on each change).
+
+
+-------------------------------------------------------------------------------
+[2026-10-26 23:36 SGT]  CHANGE 003 — Tamper-evident audit trail (IT Admin only)
+-------------------------------------------------------------------------------
+Summary
+  Adds one append-only, tamper-evident audit trail covering the events listed in
+  remarks.txt section 3 "Complete audit log" (logins, failed logins, admin edits to users
+  or roles, IT's department-quota changes, access checks) plus the request workflow,
+  entitlement changes, asset custody, configuration changes and audit downloads.
+  The trail is stored by the backend, cannot be modified by any user, and can be
+  searched, verified and downloaded by IT Admins only.
+
+What is recorded (category: events)
+  auth      sign-ins, failed sign-ins (incl. unknown usernames), lock-outs, MFA codes/enrolment,
+            password changes/resets, logouts, session revocations
+  admin     account created / updated (each field old -> new) / deleted, admin password reset,
+            MFA reset, forced sign-out
+  quota     IT department-quota changes (old -> new), org-wide quota proposals/approvals/
+            rejections, over-quota overrides with justification
+  config    department created, department -> service mapping changed
+  access    service access checks (all denials; grants at sign-in — not every 5-second re-check),
+            API permission denials (403), entitlements granted / revoked
+  workflow  every request step (submitted, approved, rejected, processed, appointment, provisioned,
+            retrieved)
+  asset     asset provisioned / retrieved
+  audit     downloads (format, count, SHA-256) and integrity checks
+  Each entry: gap-free sequence number, UTC timestamp, actor (user + role or service:<name>),
+  target, outcome (success/failure/denied), client IP, client app, structured details.
+
+How it is protected
+  1. No API can change it: read-only endpoints only (PUT/PATCH/DELETE -> 405).
+  2. Least-privilege DB role: API requests now run as `sj_app`, which has only SELECT+INSERT
+     on audit_log (schema work at start-up uses the owner account).
+  3. Database trigger rejects UPDATE / DELETE / TRUNCATE on audit_log for every role, owner included.
+  4. HMAC-SHA256 hash chain (key AUDIT_HMAC_KEY in .env, not in the DB): any edit, deletion or
+     re-ordering — even by a DB superuser bypassing the trigger — is detected; it cannot be
+     re-forged without the key.
+  5. Every entry is also appended to /var/log/servicejourney/audit-YYYY-MM-DD.jsonl on a
+     backend-only Docker volume (`auditlog`); verification compares it with the table, which
+     also catches entries cut off the end.
+  No foreign keys: deleting an employee never removes their history.
+
+Access (IT Admin only — the administrator whose actions are recorded cannot read it)
+  - Console: top bar "Audit trail" (and a panel on the IT dashboard): filter by category,
+    outcome, action, actor, target, text and date; paging; "Verify integrity";
+    "Download CSV" (formula-injection safe) and "Download JSONL (signed)" honouring filters.
+  - API: GET /api/audit, /api/audit/verify, /api/audit/export?format=csv|jsonl.
+  - The admin dashboard's "Recent sign-in activity" panel and GET /api/auth-events were
+    removed (superseded); old auth_events rows are migrated into the chain and the table dropped.
+
+Files ADDED
+  services/backend/app/audit.py                    record(), verify(), file copy, auth_events migration
+  services/backend/app/api/audit.py                list / verify / export (it_admin only)
+  services/accessmanagement/app/views/audit.py     console pages + download proxy
+  services/accessmanagement/app/templates/audit.html
+  scripts/test_audit.py                            13+ automated checks (+6 DB checks when docker CLI present)
+
+Files MODIFIED
+  services/backend/app/sql/schema.sql   audit_log table + append-only triggers; auth_events no longer created
+  services/backend/app/db.py            owner vs runtime DB role; provision_runtime_role(); start-up order
+  services/backend/app/config.py        AUDIT_HMAC_KEY (required), AUDIT_LOG_DIR
+  services/backend/app/__init__.py      audit blueprint; auth_events migration at start-up
+  services/backend/app/auth.py          403 permission denials audited
+  services/backend/app/core.py          workflow steps, entitlement grants/revokes, asset events audited
+  services/backend/app/mfa.py           auth events now go to the audit trail
+  services/backend/app/api/auth.py      service access checks audited (context login/session)
+  services/backend/app/api/admin.py     account create/update(diff)/delete, resets, sign-outs,
+                                        department + mapping changes audited
+  services/backend/app/api/quotas.py    department-quota + org-quota proposal/decision audited
+  services/backend/app/api/requests.py  over-quota overrides audited; shift revokes audited one by one
+  services/backend/app/api/mfa.py       admin MFA reset audited; /api/auth-events removed
+  services/service1/app.py, services/service2/app.py   send context=login|session on access checks
+  services/accessmanagement/app/__init__.py, templates/base.html, templates/dashboard/admin.html,
+      templates/dashboard/it_admin.html, views/dashboard.py, static/style.css   audit UI wiring
+  docker-compose.yml                    APP_DB_USER/APP_DB_PASSWORD, AUDIT_HMAC_KEY, auditlog volume
+  scripts/generate_secrets.py           + APP_DB_PASSWORD, AUDIT_HMAC_KEY
+  scripts/_e2e.py, test_mfa.py, test_credentials.py   read events via /api/audit as IT Admin
+  README.md                             new "Audit trail" section, API table, structure
+
+Verification (full stack: Postgres 16 + backend + console + both services + email, HTTPS)
+  - Audit API tests 47/47: IT-only access (admin/requestor 403, denials audited), no write API,
+    every remarks.txt event recorded with correct details (old -> new diffs), workflow/entitlement/
+    asset events, runtime role refused UPDATE/DELETE/TRUNCATE, owner refused by trigger,
+    superuser edit detected, re-hash without key detected, middle deletion detected, tail
+    truncation detected via file copy, CSV checksum + formula-injection guard, JSONL export
+    re-verified independently with the key, file copy complete.
+  - Browser test 10/10 (IT admin audit page, filters, CSV/JSONL downloads, verify; admin refused).
+  - Regression: credential API 65/65, credential UI 25/25, MFA UI 25/25, full workflow PASS,
+    scripts/test_mfa.py 23/23, scripts/test_credentials.py 37/37, scripts/test_audit.py 13/13.
+  - Upgrade: CHANGE-002 volume with auth_events -> migrated into chain, table dropped, verifies;
+    original plaintext volume -> upgrades cleanly; both idempotent on second start.
+
+ACTION NEEDED after pulling this change
+  1. python scripts/generate_secrets.py   (adds APP_DB_PASSWORD and AUDIT_HMAC_KEY to .env)
+  2. docker compose up -d --build          (no volume reset needed; the DB role is created automatically)
+  3. Sign in as itadmin -> "Audit trail".
+
+Known limitations / follow-ups
+  - If the audit write itself fails, the business action still completes (error logged to the
+    backend console; it shows up in verification as missing from the file copy).
+  - A host administrator with Docker access could still delete BOTH copies; the next step is
+    shipping entries off-box (SIEM / WORM storage) or periodically anchoring the head hash.
+  - No retention / archiving policy yet (PDPA - see remarks.txt).
+
+
+-------------------------------------------------------------------------------
+[2026-10-26 22:40 SGT]  CHANGE 002 — Credential security (passwords, sessions, secrets)
+-------------------------------------------------------------------------------
+Summary
+  Fixes the credential-security gaps listed in remarks.txt (section 1 "Credential
+  security", "Session and token control", "Service-to-service authentication", and
+  section 6 "Secrets management"). Passwords are no longer stored in plaintext.
+
+What changed
+  Password storage
+  - Argon2id hashing (argon2-cffi 23.1.0; t=3, m=64 MiB, p=4, per-hash salt), per the
+    OWASP Password Storage Cheat Sheet / RFC 9106. Automatic re-hash if parameters rise.
+  - The plaintext `password` column is gone. Existing databases are migrated on start-up:
+    each plaintext password is hashed, the account is forced to change password, and the
+    column is dropped. seed.sql now contains only Argon2id hashes.
+  Password policy (NIST SP 800-63B / OWASP ASVS 2.1)
+  - 12-128 chars, spaces/Unicode allowed (NFKC), no composition rules, no forced expiry.
+  - Rejects: common/expected passwords (local blocklist + "Password2024!" style variants),
+    sequences, repetition, the user's own name/username/email, the current password, and
+    passwords in known breaches (Have I Been Pwned k-anonymity API; fails open offline;
+    env PASSWORD_BREACH_CHECK).
+  - Temporary passwords (seeded, migrated, admin-created, admin-reset) must be replaced at
+    sign-in (after TOTP) before any session is issued.
+  Brute force / enumeration
+  - Account lock-out: 5 wrong passwords -> locked 15 min (password reset unlocks).
+  - Per-client-IP rate limits: sign-in 20/min, MFA 20/min, forgot-password 5/15 min (HTTP 429).
+  - Same error message and same timing (dummy Argon2 verify) for unknown users vs wrong
+    passwords; forgot-password always answers the same and mails in the background.
+  Password lifecycle
+  - Self-service change on the Security page (needs current password; ends other sessions).
+  - Forgot password: e-mailed single-use link, 30 min, stored as SHA-256; ends all sessions.
+  - Admin "Reset password": random temporary password shown once, user signed out.
+  - Admin "Create account": blank password -> generated temporary one; chosen ones must pass
+    the policy. Passwords can no longer be set via PUT /api/employees/{id}; status values
+    are validated.
+  Sessions (OWASP Session Management)
+  - Server-side, revocable sessions (only SHA-256 of a 256-bit id stored): 30-min idle
+    timeout, 8-h absolute lifetime, server-side logout, "Where you're signed in" list,
+    sign out one session / everywhere else, admin "Sign out" (force sign-out).
+  - Sessions end immediately on password change/reset, MFA reset, deactivation, role change.
+  Service-to-service authentication
+  - Console, service1, service2 authenticate to the backend with client credentials
+    (X-Client-Id / X-Client-Secret). /api/service/access now refuses anonymous callers and a
+    service may only ask about itself. Forwarded client IPs are trusted only from
+    authenticated clients. Service logins get the identity but no console session.
+  Secrets management
+  - No secrets in docker-compose.yml any more. New scripts/generate_secrets.py writes strong
+    random values into the git-ignored .env (only adds missing keys; never touches existing
+    ones such as SMTP). All apps refuse to start with a missing/weak secret. MFA_ENC_KEY is
+    now required (no longer derived from SECRET_KEY).
+  Console hardening
+  - CSRF Origin/Referer check on every POST, idle-timeout cookie, X-Frame-Options DENY,
+    Referrer-Policy same-origin, Cache-Control no-store, X-Content-Type-Options nosniff.
+  - Backend /health no longer leaks exception details; all API responses Cache-Control no-store.
+
+Files ADDED
+  services/backend/app/passwords.py            Argon2id, policy, breach check, lock-out, migration
+  services/backend/app/password_blocklist.py   common/expected password list
+  services/backend/app/sessions.py             server-side revocable sessions
+  services/backend/app/clients.py              client credentials, trusted client IP
+  services/backend/app/ratelimit.py            per-IP sliding-window rate limiter
+  services/backend/app/api/account.py          password change/forgot/reset, policy, sessions
+  services/accessmanagement/app/templates/password_change_required.html, forgot_password.html,
+      reset_password.html, temporary_password.html, _password_fields.html
+  scripts/generate_secrets.py                  creates/completes .env with random secrets
+  scripts/test_credentials.py                  37 automated credential-security checks
+  scripts/_e2e.py                              shared helpers for the test scripts
+
+Files MODIFIED
+  services/backend/app/sql/schema.sql   password_hash, must_change_password, lock-out columns,
+                                        user_sessions, password_reset_tokens; legacy column handling
+  services/backend/app/sql/seed.sql     no plaintext; demo accounts get Argon2id hashes (temporary)
+  services/backend/app/db.py            schema -> migration -> seed start-up order
+  services/backend/app/__init__.py      client auth hook, account blueprint, no-store, migration
+  services/backend/app/config.py        required secrets, session/password/lock-out/client settings
+  services/backend/app/auth.py          sign-in challenges (verify/enroll/pwchange); sessions in require_auth
+  services/backend/app/api/auth.py      hardened login, forced password change, logout, client-only access API
+  services/backend/app/api/admin.py     temp passwords, admin reset, force sign-out, no raw password edit
+  services/backend/app/api/mfa.py       works with server-side sessions; MFA reset ends sessions
+  services/backend/app/mfa.py           MFA key now required; trusted client IP
+  services/backend/requirements.txt     + argon2-cffi==23.1.0
+  services/accessmanagement/app/__init__.py, config.py, backend_client.py   secrets, client creds,
+                                        idle timeout, CSRF origin check, security headers
+  services/accessmanagement/app/views/auth.py, security.py, admin.py        new flows/pages
+  services/accessmanagement/app/templates/login.html, security.html, mfa_recovery_codes.html,
+      dashboard/admin.html; static/style.css
+  services/service1/app.py, services/service2/app.py   required secrets, client creds,
+                                        clearer locked / temporary-password messages
+  scripts/test_mfa.py                   updated for temporary passwords + server-side sessions
+  docker-compose.yml                    all secrets from .env (fails fast if missing)
+  README.md                             "Credential security" section, run/upgrade steps, API table
+
+Verification (full stack: Postgres 16 + backend + console + both services + email, HTTPS)
+  - Credential API tests: 65/65 pass (storage, generic errors + timing, policy, forced change,
+    sessions list/revoke/sign-out-everywhere/idle/absolute/logout/forged, change, lock-out,
+    forgot/reset incl. single-use + expiry, rate limits, client auth, admin flows, audit).
+  - Browser tests (Playwright): credential UI 25/25; MFA UI regression 25/25.
+  - Breach check unit test: breached password rejected, only the 5-char prefix sent, fails open.
+  - Full grant workflow regression with every role on TOTP + own password: PASS.
+  - Legacy migration: original-schema DB with plaintext (one custom password) -> all 19 hashed,
+    custom password preserved, column dropped, idempotent on second start.
+  - scripts/test_mfa.py 23/23 and scripts/test_credentials.py 37/37 on a fresh stack.
+  - docker compose config validates with .env, and fails with a clear message without it.
+
+ACTION NEEDED after pulling this change
+  1. python scripts/generate_secrets.py      (adds the new secrets to .env)
+  2. docker compose down -v                  (new DB password; old volume held plaintext)
+  3. docker compose up -d --build
+  4. Sign in: each demo account's temporary password is its username; you will be asked to
+     choose your own (staff also set up TOTP first).
+
+Known limitations / follow-ups
+  - Rate-limit counters are in memory (single process); use Redis if the backend is scaled out.
+  - Breach check needs internet access from the backend container (otherwise local list only).
+  - Reset e-mails need SMTP configured (or the mailbox port opened) to be readable.
+  - Services still collect passwords themselves (SSO/OIDC would remove this - see remarks.txt).
+
+
+-------------------------------------------------------------------------------
+[2026-10-26 21:57 SGT]  CHANGE 001 — TOTP two-factor authentication (MFA)
+-------------------------------------------------------------------------------
+Summary
+  Sign-in is now password + a 6-digit TOTP code (RFC 6238) from an authenticator
+  app (Google/Microsoft Authenticator, Authy, 1Password, ...). TOTP is the default
+  and only MFA method.
+
+Policy
+  - REQUIRED for staff roles: admin, requestor, hr, director, aa, it_admin, euss.
+    They are forced to enrol (QR code) at their first sign-in and cannot turn it off.
+  - OPTIONAL for ordinary employees: opt in/out from the console "Security" page.
+  - Configurable with the backend env var MFA_REQUIRED_ROLES.
+
+Behaviour
+  - Login is two steps: /api/login (password) returns a 5-minute "mfa_token"
+    challenge (NOT a session); /api/login/mfa (code) returns the session token.
+  - 10 one-time recovery codes issued at enrolment (shown once, stored hashed,
+    regenerable from Security with a current code).
+  - TOTP secrets encrypted at rest (Fernet; key MFA_ENC_KEY or derived from SECRET_KEY).
+  - Each 30 s code accepted once per account (replay protection, atomic in SQL),
+    +/- 1 window for clock drift.
+  - 5 wrong codes lock the second factor for 5 minutes.
+  - Backend rejects any password-only session token for an account that requires
+    or has enabled MFA (defence in depth, e.g. tokens issued before this change).
+  - Administrator can reset a user's MFA (lost phone) from the dashboard "2FA" column.
+  - New auth_events audit table (failed passwords, wrong codes, lock-outs, enrolments,
+    recovery-code use, resets) shown to the admin as "Recent sign-in activity".
+  - Personal Laptop (service1) and Account (service2) logins also ask for the code;
+    un-enrolled staff are told to set up 2FA in the console first.
+  - Passwords are still plaintext (unchanged, per POC requirements).
+
+Files ADDED
+  services/backend/app/mfa.py                     TOTP logic: encryption, verify, replay, lock-out, recovery codes, audit
+  services/backend/app/api/mfa.py                 self-service endpoints, admin reset, /api/auth-events
+  services/accessmanagement/app/mfa_ui.py         server-side QR code rendering (segno)
+  services/accessmanagement/app/views/security.py Security page (set up / regenerate codes / turn off)
+  services/accessmanagement/app/templates/mfa_verify.html, mfa_setup.html,
+      _mfa_setup_body.html, mfa_recovery_codes.html, security.html
+  services/service1/templates/mfa.html            code step for the Personal Laptop service
+  services/service2/templates/mfa.html            code step for the Account service
+  scripts/test_mfa.py                             automated end-to-end MFA check (21 checks)
+  ITP2_changes.txt                                this log
+
+Files MODIFIED
+  services/backend/app/sql/schema.sql       employees.mfa_* columns; mfa_recovery_codes and auth_events tables
+                                            (idempotent ALTER/CREATE IF NOT EXISTS — existing volumes upgrade in place)
+  services/backend/app/config.py            MFA settings (required roles, issuer, key, limits)
+  services/backend/app/auth.py              tokens carry "amr"; separate MFA challenge tokens; MFA enforced in require_auth
+  services/backend/app/api/auth.py          two-step login + first-time enrolment endpoints; login audit
+  services/backend/app/api/reference.py     /api/employees includes mfa_enabled (admin only)
+  services/backend/app/__init__.py          registers the MFA blueprint
+  services/backend/requirements.txt         + pyotp==2.9.0, cryptography==43.0.3
+  services/accessmanagement/app/views/auth.py      password -> code / forced enrolment -> dashboard
+  services/accessmanagement/app/views/admin.py     "Reset MFA" action
+  services/accessmanagement/app/views/dashboard.py admin dashboard loads sign-in activity
+  services/accessmanagement/app/backend_client.py  forwards client IP for the audit log; public sign-in calls
+  services/accessmanagement/app/__init__.py        registers the Security blueprint
+  services/accessmanagement/app/templates/base.html            "Security" link in the top bar
+  services/accessmanagement/app/templates/login.html           note that staff set up TOTP on first sign-in
+  services/accessmanagement/app/templates/dashboard/admin.html "2FA" column + Reset, "Recent sign-in activity"
+  services/accessmanagement/app/static/style.css               styles for the MFA screens
+  services/accessmanagement/requirements.txt                   + segno==1.6.1
+  services/service1/app.py, services/service2/app.py           handle mfa_required -> /mfa code step
+  docker-compose.yml                        backend env MFA_REQUIRED_ROLES, MFA_ENC_KEY
+  .env.example                              documents MFA_REQUIRED_ROLES / MFA_ENC_KEY
+  README.md                                 new "Two-factor authentication (TOTP)" section, API table, structure
+
+Verification (run against the full stack: Postgres 16 + backend + console + both services + email, over HTTPS)
+  - API tests: 33/33 pass — enrolment, wrong code, replay rejected, recovery code single-use,
+    tampered/expired challenge rejected, password-only token refused, lock-out after 5 wrong codes,
+    admin reset (and non-admin refused), employee opt-in/opt-out, required role cannot disable,
+    secret stored encrypted, every event in the audit log.
+  - Browser tests (Playwright, Chromium): 25/25 pass — forced enrolment with QR, recovery codes page,
+    sign-in with code, wrong code message, recovery-code sign-in, Security page, employee opt-in,
+    service1 login with code, un-enrolled staff blocked on service1, admin 2FA column, reset, activity log.
+  - Regression: full grant workflow (req -> HR -> Director -> AA -> IT -> appointment -> EUSS) completes
+    with every staff role on TOTP; charlie is then authorised for service1.
+  - Upgrade: old schema + seed, then new schema applied twice — no errors, nobody enrolled.
+  - scripts/test_mfa.py: 21/21 checks pass.
+
+How to use
+  docker compose up -d --build      (existing volume upgrades automatically)
+  Sign in as e.g. itadmin/itadmin -> scan the QR -> enter the code -> save recovery codes.
+  Optional check on a fresh stack:  pip install requests pyotp && python scripts/test_mfa.py
+
+Known limitations / follow-ups
+  - First-time enrolment is trust-on-first-use (password only). Production: bind enrolment to
+    an out-of-band step (e.g. HR-issued activation link).
+  - Changing MFA_ENC_KEY later makes stored secrets unreadable (users must be reset and re-enrol).
+  - No step-up re-prompt for sensitive actions yet; no password hashing yet (separate change).

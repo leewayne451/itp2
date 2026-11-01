@@ -7,7 +7,7 @@ import binascii
 
 from flask import jsonify, g
 
-from . import db
+from . import audit, db
 from .mailer import send_email
 
 # Workflow states and the role that acts on each. EVERY request type follows the
@@ -44,6 +44,14 @@ def set_status(rid, status):
 def add_event(rid, actor_id, action, note=None):
     db.query("INSERT INTO request_events (request_id, actor_id, action, note) VALUES (%s,%s,%s,%s)",
              (rid, actor_id, action, note), fetch=None)
+    r = get_joined(rid)
+    if r:   # mirror every workflow step into the tamper-evident audit trail
+        audit.record("workflow", f"request_{action}", outcome="denied" if action == "rejected" else "success",
+                     target_type="request", target_id=rid,
+                     target_label=f"#{rid} {r['type']} for {r['target_username']}",
+                     details={"type": r["type"], "status": r["status"], "note": note,
+                              "resource": _resource_desc(r), "target_employee": r["target_username"],
+                              "on_behalf": r["on_behalf"]})
     notify(rid, action, note, actor_id)  # notify next approver, requestor/target, and the actor
 
 
@@ -212,13 +220,26 @@ def revoke_with_dependents(emp_id, service_id):
     return removed
 
 
+def _audit_entitlement(action, emp_id, service_id):
+    who = db.query("SELECT username FROM employees WHERE id=%s", (emp_id,), fetch="one")
+    svc = db.query("SELECT key, name FROM services WHERE id=%s", (service_id,), fetch="one")
+    audit.record("access", action, target_type="employee", target_id=emp_id,
+                 target_label=who and who["username"],
+                 details={"service": svc and svc["name"], "service_key": svc and svc["key"]})
+
+
 def grant_access(emp_id, service_id):
-    db.query("INSERT INTO employee_access (employee_id, service_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
-             (emp_id, service_id), fetch=None)
+    row = db.query("""INSERT INTO employee_access (employee_id, service_id) VALUES (%s,%s)
+                      ON CONFLICT DO NOTHING RETURNING employee_id""", (emp_id, service_id), fetch="one")
+    if row:   # only a real change is an entitlement event
+        _audit_entitlement("entitlement_granted", emp_id, service_id)
 
 
 def revoke_access(emp_id, service_id):
-    db.query("DELETE FROM employee_access WHERE employee_id=%s AND service_id=%s", (emp_id, service_id), fetch=None)
+    row = db.query("DELETE FROM employee_access WHERE employee_id=%s AND service_id=%s RETURNING employee_id",
+                   (emp_id, service_id), fetch="one")
+    if row:
+        _audit_entitlement("entitlement_revoked", emp_id, service_id)
 
 
 def service_by_type(rtype):
@@ -314,6 +335,11 @@ def set_department_quota(dept_id, service_id, allowed):
 def add_asset_event(asset_id, emp_id, action, request_id):
     db.query("INSERT INTO asset_events (asset_id, employee_id, action, request_id) VALUES (%s,%s,%s,%s)",
              (asset_id, emp_id, action, request_id), fetch=None)
+    a = db.query("SELECT asset_tag, kind FROM assets WHERE id=%s", (asset_id,), fetch="one")
+    who = db.query("SELECT username FROM employees WHERE id=%s", (emp_id,), fetch="one")
+    audit.record("asset", f"asset_{action}", target_type="asset", target_id=a and a["asset_tag"],
+                 target_label=f"{a['kind']} {a['asset_tag']}" if a else None,
+                 details={"employee": who and who["username"], "request_id": request_id})
 
 
 def employee_asset_kinds_needed(emp_id):

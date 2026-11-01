@@ -37,6 +37,7 @@ def _requestor():
         services=get_json("/api/services", default=[]),
         departments=get_json("/api/departments", default=[]),
         mine=get_json("/api/requests/mine", default=[]),
+        planned_rotations=get_json("/api/rotations/planned", default=[]),
     )
 
 
@@ -49,11 +50,20 @@ def _approver():
     department_quotas = get_json("/api/department-quotas", default=[]) if is_aa else []
     quota_reqs = get_json("/api/quota-requests", default=[]) if is_aa else []
     mine_qr = [q for q in quota_reqs if q["requested_by"] == g.user["id"]]
+    # Mandatory Job Rotation (CHANGE 006): Directors decide, HR follows the list.
+    mjr = get_json("/api/rotations", default=None) if role in ("director", "hr") else None
+    officers = (mjr or {}).get("officers", [])
     return render_template(
         "dashboard/approver.html",
         queue=get_json("/api/requests/queue", default=[]),
         history=get_json("/api/requests/history", default=[]),
         quotas=quotas, department_quotas=department_quotas, my_quota_requests=mine_qr,
+        mjr=mjr,
+        mjr_due=[o for o in officers if o["state"] == "due"],
+        mjr_soon=[o for o in officers if o["state"] == "due_soon"],
+        mjr_tracked=[o for o in officers if o["state"] in ("rotation_planned", "shift_in_progress", "kept")],
+        mjr_all=officers,
+        departments=get_json("/api/departments", default=[]) if role == "director" else [],
     )
 
 

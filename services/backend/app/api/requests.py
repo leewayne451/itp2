@@ -1,7 +1,7 @@
 """The request lifecycle: creation, listing, and every workflow transition."""
 from flask import Blueprint, request, jsonify, g
 
-from .. import db
+from .. import audit, db, rotation, sync
 from ..auth import require_auth, require_role
 from ..core import (
     STATE_ROLE, APPROVAL_NEXT, STAFF_ROLES, KIND_OF,
@@ -90,15 +90,25 @@ def _create_shift(target, on_behalf, justification, documents, body):
     if db.query("SELECT 1 FROM requests WHERE target_employee_id=%s AND type='shift' "
                 "AND status NOT IN ('completed','rejected')", (target["id"],), fetch="one"):
         return jsonify(error="A shift for this employee is already in progress"), 409
+    # MJR (CHANGE 006): a shift raised from a Director's "rotate" decision is linked to it.
+    rotation_id = body.get("rotation_decision_id")
+    if rotation_id:
+        link_error = rotation.validate_link(rotation_id, target["id"])
+        if link_error:
+            return jsonify(error=link_error), 409
     row = db.query(
         """INSERT INTO requests (type, requestor_id, target_employee_id, target_department_id,
                                  source_department_id, on_behalf, justification, status)
            VALUES ('shift',%s,%s,%s,%s,%s,%s,'pending_hr') RETURNING id""",
         (g.user["id"], target["id"], dept_id, target["department_id"], on_behalf, justification), fetch="one")
     db.query("UPDATE employees SET status='suspended' WHERE id=%s", (target["id"],), fetch=None)
+    sync.push(target["id"], end_sessions=True)   # Keycloak: account disabled, signed out everywhere
     attach_documents(row["id"], documents)
+    if rotation_id:
+        rotation.link_shift(rotation_id, row["id"])
     add_event(row["id"], g.user["id"], "submitted",
-              "Department shift requested; current services suspended pending transfer")
+              "Department shift requested; current services suspended pending transfer"
+              + (" (Mandatory Job Rotation, confirmed by Director)" if rotation_id else ""))
     return jsonify(request_dict(get_joined(row["id"]))), 201
 
 
@@ -237,6 +247,7 @@ def reject(rid):
     if req["type"] == "shift":  # a rejected shift lifts the suspension
         db.query("UPDATE employees SET status='active' WHERE id=%s AND status='suspended'",
                  (req["target_employee_id"],), fetch=None)
+        sync.push(req["target_employee_id"])     # Keycloak: account enabled again
     add_event(rid, g.user["id"], "rejected", reason)
     return jsonify(request_dict(get_joined(rid)))
 
@@ -281,6 +292,9 @@ def _process_grant(req):
     note = "Access provisioned" + (" (laptop + account)" if svc["resource_type"] == "laptop" else "")
     if over:
         note += f" — OVER-QUOTA OVERRIDE by IT: {override_reason} [{', '.join(over)}]"
+        audit.record("quota", "quota_override", target_type="request", target_id=req["id"],
+                     target_label=f"#{req['id']} {req['type']}",
+                     details={"exceeded": over, "justification": override_reason})
     add_event(req["id"], g.user["id"], "processed", note)
     return jsonify(request_dict(get_joined(req["id"])))
 
@@ -300,8 +314,13 @@ def _process_into_department(req, verb):
         return jsonify(requires_override=True, warning="Quota exceeded for: " + ", ".join(over)), 409
 
     if verb == "shift":
-        db.query("DELETE FROM employee_access WHERE employee_id=%s", (target,), fetch=None)
-    db.query("UPDATE employees SET department_id=%s, status='active' WHERE id=%s", (new_dept, target), fetch=None)
+        # Revoke one by one so every removed entitlement is individually audited.
+        for row in db.query("SELECT service_id FROM employee_access WHERE employee_id=%s", (target,)):
+            revoke_access(target, row["service_id"])
+    # department_since restarts the Mandatory Job Rotation clock (CHANGE 006).
+    db.query("UPDATE employees SET department_id=%s, status='active', department_since=CURRENT_DATE, "
+             "rotation_alerted_at=NULL WHERE id=%s", (new_dept, target), fetch=None)
+    sync.push(target)                            # Keycloak: account enabled again
     for sid in svc_ids:
         grant_access(target, sid)
 
@@ -311,6 +330,9 @@ def _process_into_department(req, verb):
             f"Onboarded into {dept['name']}; services set to department template ({service_names(svc_ids)})")
     if over:
         note += f" — OVER-QUOTA OVERRIDE by IT: {override_reason} [{', '.join(over)}]"
+        audit.record("quota", "quota_override", target_type="request", target_id=req["id"],
+                     target_label=f"#{req['id']} {req['type']}",
+                     details={"exceeded": over, "justification": override_reason})
     add_event(req["id"], g.user["id"], "processed", note)
     return jsonify(request_dict(get_joined(req["id"])))
 

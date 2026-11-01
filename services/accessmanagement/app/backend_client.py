@@ -1,32 +1,64 @@
-"""Thin client the views use to talk to the backend API with the session token."""
-import requests
-from flask import session, current_app
+"""Thin client the views use to talk to the backend API with the user's Keycloak
+access token (kept server-side in token_store)."""
+import time
 
-from .config import verify
+import requests
+from flask import session, current_app, request
+
+from .config import verify, CLIENT_ID, CLIENT_SECRET
 
 
 class AuthExpired(Exception):
     """Raised when the backend rejects our token (401); handled by an errorhandler."""
+
+    def __init__(self, reason=None):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _url(path):
     return current_app.config["BACKEND_URL"].rstrip("/") + path
 
 
-def login(username, password):
-    return requests.post(_url("/api/login"), json={"username": username, "password": password},
-                         timeout=10, verify=verify())
+def _forwarded():
+    """Our client credential (service-to-service auth) plus the end user's address
+    and browser, which the backend trusts ONLY because we authenticated."""
+    return {"X-Client-Id": CLIENT_ID, "X-Client-Secret": CLIENT_SECRET,
+            "X-Forwarded-For": request.remote_addr or "",
+            "X-Client-User-Agent": (request.headers.get("User-Agent") or "")[:300]}
 
 
-def call(method, path, json=None, params=None):
-    headers = {}
-    token = session.get("token")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+def _access_token():
+    """The signed-in user's access token, refreshed via Keycloak when about to expire."""
+    from . import token_store
+    from .oidc_client import client
+    handle = session.get("handle")
+    entry = token_store.get(handle)
+    if not entry:
+        raise AuthExpired("Your session has ended")
+    if entry["access_exp"] - time.time() < 30:
+        try:
+            tokens = client().refresh(entry["refresh"])
+        except Exception as e:  # noqa: BLE001 — refresh token expired / SSO session ended
+            token_store.drop(handle)
+            raise AuthExpired("Your session has ended") from e
+        exp = client().access_claims(tokens["access_token"]).get("exp", 0)
+        token_store.update(handle, tokens, exp)
+        return tokens["access_token"]
+    return entry["access"]
+
+
+def call(method, path, json=None, params=None, token=None):
+    headers = _forwarded()
+    headers["Authorization"] = f"Bearer {token or _access_token()}"
     resp = requests.request(method, _url(path), headers=headers, json=json, params=params,
                             timeout=15, verify=verify())
     if resp.status_code == 401:
-        raise AuthExpired()
+        try:
+            reason = resp.json().get("error")
+        except ValueError:
+            reason = None
+        raise AuthExpired(reason)
     return resp
 
 

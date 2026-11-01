@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ service_name }} — Verify sign-in</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="card">
+    <div class="logo">{{ service_name }}</div>
+    <p class="subtitle">Enter the 6-digit code from your authenticator app{% if username %} for <code>{{ username }}</code>{% endif %}</p>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('mfa') }}">
+      <label>Authentication code
+        <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12"
+               placeholder="123 456" required autofocus>
+      </label>
+      <button type="submit">Verify</button>
+    </form>
+    <p class="hint">You can also use one of your recovery codes. <a href="{{ url_for('logout') }}">Start over</a></p>
+  </main>
+</body>
+</html>

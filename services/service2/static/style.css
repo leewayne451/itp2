@@ -28,3 +28,6 @@ code { background: #f1f5f9; padding: .1rem .35rem; border-radius: 4px; }
 }
 .success h1 { font-size: 1.3rem; margin: 0 0 .5rem; }
 .success p { color: var(--ink); font-size: .92rem; margin: .3rem 0; }
+
+/* single sign-on button */
+.btn.sso { display: block; text-align: center; margin-top: .6rem; }

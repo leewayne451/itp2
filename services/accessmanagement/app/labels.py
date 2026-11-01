@@ -1,5 +1,9 @@
 """Presentation helpers exposed to Jinja templates."""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+# Every time shown to users is Singapore time (UTC+8, no daylight saving). The database
+# and the audit trail keep UTC; only the display is converted.
+SGT = timezone(timedelta(hours=8), "SGT")
 
 STATUS_LABEL = {
     "pending_hr": "Pending HR approval",
@@ -23,6 +27,21 @@ ACTION_LABEL = {
 }
 
 
+# Mandatory Job Rotation states (CHANGE 006): label + pill colour.
+ROTATION_STATE = {
+    "due": ("Due — decision needed", "bad"),
+    "due_soon": ("Due soon", "wait"),
+    "rotation_planned": ("Rotate — shift to be raised", "wait"),
+    "shift_in_progress": ("Shift in progress", "wait"),
+    "kept": ("Kept", "ok"),
+    "ok": ("Within term", "ok"),
+}
+
+
+def rotation_state(s):
+    return ROTATION_STATE.get(s, (s, "wait"))
+
+
 def status_label(s):
     return STATUS_LABEL.get(s, s)
 
@@ -31,11 +50,19 @@ def status_class(s):
     return "ok" if s == "completed" else "bad" if s == "rejected" else "wait"
 
 
-def fmt_dt(iso):
+def to_sgt(iso):
+    """ISO timestamp (any offset; naive = UTC) -> aware datetime in Singapore time."""
+    d = datetime.fromisoformat(iso)
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.astimezone(SGT)
+
+
+def fmt_dt(iso, seconds=False):
     if not iso:
         return "—"
     try:
-        return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M")
+        return to_sgt(iso).strftime("%Y-%m-%d %H:%M:%S" if seconds else "%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         return iso
 
@@ -54,7 +81,8 @@ def behalf_label(r):
 
 def register(app):
     app.jinja_env.filters["dt"] = fmt_dt
+    app.jinja_env.filters["dts"] = lambda iso: fmt_dt(iso, seconds=True)
     app.jinja_env.globals.update(
         status_label=status_label, status_class=status_class, req_resource=req_resource,
-        behalf_label=behalf_label, ROLE_LABEL=ROLE_LABEL, TYPE_LABEL=TYPE_LABEL, ACTION_LABEL=ACTION_LABEL,
+        behalf_label=behalf_label, rotation_state=rotation_state, ROLE_LABEL=ROLE_LABEL, TYPE_LABEL=TYPE_LABEL, ACTION_LABEL=ACTION_LABEL,
     )

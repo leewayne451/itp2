@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Verify sign-in{% endblock %}
+{% block body_class %}auth{% endblock %}
+{% block body %}
+<main class="login-card">
+  <h1>Two-factor verification</h1>
+  <p class="subtitle">Enter the 6-digit code from your authenticator app{% if username %} for <code>{{ username }}</code>{% endif %}.</p>
+  {% include "_flashes.html" %}
+  <form method="post" action="{{ url_for('auth.mfa_verify') }}">
+    <label>Authentication code
+      <input name="code" class="otp-in" inputmode="numeric" autocomplete="one-time-code"
+             pattern="[0-9A-Za-z\- ]{6,12}" maxlength="12" placeholder="123 456" required autofocus>
+    </label>
+    <button type="submit" class="primary">Verify</button>
+  </form>
+  <p class="hint">Lost your phone? Enter one of your <strong>recovery codes</strong> (e.g. <code>ABCDE-FGHJK</code>) instead,
+    or ask an administrator to reset your two-factor authentication.<br>
+    <a href="{{ url_for('auth.logout') }}">Cancel and sign in again</a></p>
+</main>
+{% endblock %}

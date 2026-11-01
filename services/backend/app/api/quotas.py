@@ -1,7 +1,7 @@
 """Quota figures (AA + IT Admin) and quota-change requests (AA proposes, IT decides)."""
 from flask import Blueprint, request, jsonify, g
 
-from .. import db
+from .. import audit, db
 from ..auth import require_role
 from ..core import (quota_used, quota_allowed, QR_SELECT, quota_request_dict,
                     dept_quota_allowed, dept_quota_used, set_department_quota)
@@ -31,7 +31,8 @@ def list_department_quotas():
 @require_role("it_admin", "admin")
 def update_department_quotas(dept_id):
     """IT Admin sets the laptop/account capacity for one department."""
-    if not db.query("SELECT 1 FROM departments WHERE id=%s", (dept_id,), fetch="one"):
+    dept = db.query("SELECT name FROM departments WHERE id=%s", (dept_id,), fetch="one")
+    if not dept:
         return jsonify(error="Department not found"), 404
     quotas = (request.get_json(silent=True) or {}).get("quotas") or {}
     if not quotas:
@@ -43,12 +44,18 @@ def update_department_quotas(dept_id):
             return jsonify(error="Quota values must be whole numbers"), 400
         if allowed < 0:
             return jsonify(error="A quota cannot be negative"), 400
-        svc = db.query("SELECT resource_type FROM services WHERE id=%s", (sid,), fetch="one")
+        svc = db.query("SELECT name, resource_type FROM services WHERE id=%s", (sid,), fetch="one")
         if not svc:
             return jsonify(error="Unknown resource"), 404
         if svc["resource_type"] not in ("laptop", "account"):
             return jsonify(error="Only laptop and account have department quotas"), 400
+        old = dept_quota_allowed(dept_id, sid)
         set_department_quota(dept_id, sid, allowed)
+        if old != allowed:
+            audit.record("quota", "department_quota_changed", target_type="department", target_id=dept_id,
+                         target_label=dept["name"],
+                         details={"resource": svc["name"], "from": old, "to": allowed,
+                                  "in_use": dept_quota_used(dept_id, sid)})
     return jsonify(ok=True, department_id=dept_id)
 
 
@@ -90,6 +97,10 @@ def create_quota_request():
         """INSERT INTO quota_requests (service_id, requested_by, current_allowed, new_allowed, reason)
            VALUES (%s,%s,%s,%s,%s) RETURNING id""",
         (service_id, g.user["id"], q["allowed"], new_allowed, reason), fetch="one")
+    svc = db.query("SELECT name FROM services WHERE id=%s", (service_id,), fetch="one")
+    audit.record("quota", "org_quota_change_proposed", target_type="quota_request", target_id=row["id"],
+                 target_label=f"{svc['name']} org-wide",
+                 details={"resource": svc["name"], "from": q["allowed"], "to": new_allowed, "reason": reason})
     return jsonify(id=row["id"]), 201
 
 
@@ -111,6 +122,14 @@ def _decide(qid, approve):
     db.query("UPDATE quota_requests SET status=%s, decided_by=%s, decide_note=%s, updated_at=now() WHERE id=%s",
              ("approved" if approve else "rejected", g.user["id"], note or (None if approve else "No reason given"), qid),
              fetch=None)
+    svc = db.query("SELECT name FROM services WHERE id=%s", (qr["service_id"],), fetch="one")
+    proposer = db.query("SELECT username FROM employees WHERE id=%s", (qr["requested_by"],), fetch="one")
+    audit.record("quota", "org_quota_change_approved" if approve else "org_quota_change_rejected",
+                 outcome="success" if approve else "denied", target_type="quota_request", target_id=qid,
+                 target_label=f"{svc['name']} org-wide",
+                 details={"resource": svc["name"], "from": qr["current_allowed"], "to": qr["new_allowed"],
+                          "applied": approve, "note": note or None,
+                          "proposed_by": proposer and proposer["username"]})
     return jsonify(ok=True)
 
 

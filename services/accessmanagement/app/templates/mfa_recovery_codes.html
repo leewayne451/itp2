@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Recovery codes{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <div class="panel-head"><h2>{{ "Two-factor authentication is on" if first_time else "New recovery codes" }}</h2></div>
+  <p>Save these <strong>recovery codes</strong> somewhere safe (a password manager or printed copy).
+    Each one signs you in <strong>once</strong> if you lose access to your authenticator app.</p>
+  <p class="muted small">They will <strong>not be shown again</strong>.{% if not first_time %} Your previous codes no longer work.{% endif %}</p>
+  <ol class="recovery-codes" data-testid="recovery-codes">
+    {% for c in codes %}<li><code>{{ c }}</code></li>{% endfor %}
+  </ol>
+  <a class="btn-sm primary" href="{{ continue_url }}">{{ continue_label or "I've saved them — continue" }}</a>
+</section>
+{% endblock %}

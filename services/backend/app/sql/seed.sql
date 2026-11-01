@@ -31,19 +31,20 @@ JOIN services s ON (
 WHERE NOT EXISTS (SELECT 1 FROM department_access);
 
 -- ------------------------------------------------------------------ accounts
--- Workflow role accounts (username/password identical for easy demo).
--- Columns: username, password, full_name, role
-INSERT INTO employees (username, password, full_name, role)
-SELECT v.username, v.password, v.full_name, v.role
+-- Workflow role accounts. Their (temporary) demo passwords are set at the end
+-- of this file as Argon2id hashes — no plaintext password is stored anywhere.
+-- Columns: username, full_name, role
+INSERT INTO employees (username, full_name, role)
+SELECT v.username, v.full_name, v.role
 FROM (VALUES
-        ('admin',    'admin',    'System Administrator', 'admin'),
-        ('req',      'req',      'Riley Requestor',      'requestor'),
-        ('hr',       'hr',       'Harper HR',            'hr'),
-        ('director', 'director', 'Dana Director',        'director'),
-        ('aa',       'aa',       'Alex Authority',       'aa'),
-        ('itadmin',  'itadmin',  'Ivan IT-Admin',        'it_admin'),
-        ('euss',     'euss',     'Erin EUSS',            'euss')
-     ) AS v(username, password, full_name, role)
+        ('admin',    'System Administrator', 'admin'),
+        ('req',      'Riley Requestor',      'requestor'),
+        ('hr',       'Harper HR',            'hr'),
+        ('director', 'Dana Director',        'director'),
+        ('aa',       'Alex Authority',       'aa'),
+        ('itadmin',  'Ivan IT-Admin',        'it_admin'),
+        ('euss',     'Erin EUSS',            'euss')
+     ) AS v(username, full_name, role)
 WHERE NOT EXISTS (SELECT 1 FROM employees e WHERE e.username = v.username);
 
 -- Ensure roles are correct even if the accounts pre-existed with default role.
@@ -57,22 +58,22 @@ UPDATE employees SET role = 'euss'                        WHERE username = 'euss
 
 -- Sample employees (access subjects). They start with NO access — access is
 -- obtained through the approval workflow.
-INSERT INTO employees (username, password, full_name, department_id, role, status)
-SELECT 'alice', 'alice', 'Alice Employee', (SELECT id FROM departments WHERE name = 'Engineering'), 'employee', 'active'
+INSERT INTO employees (username, full_name, department_id, role, status)
+SELECT 'alice', 'Alice Employee', (SELECT id FROM departments WHERE name = 'Engineering'), 'employee', 'active'
 WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'alice');
 
-INSERT INTO employees (username, password, full_name, department_id, role, status)
-SELECT 'bob', 'bob', 'Bob Employee', (SELECT id FROM departments WHERE name = 'Sales'), 'employee', 'active'
+INSERT INTO employees (username, full_name, department_id, role, status)
+SELECT 'bob', 'Bob Employee', (SELECT id FROM departments WHERE name = 'Sales'), 'employee', 'active'
 WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'bob');
 
-INSERT INTO employees (username, password, full_name, department_id, role, status)
-SELECT 'charlie', 'charlie', 'Charlie Employee', (SELECT id FROM departments WHERE name = 'Human Resources'), 'employee', 'active'
+INSERT INTO employees (username, full_name, department_id, role, status)
+SELECT 'charlie', 'Charlie Employee', (SELECT id FROM departments WHERE name = 'Human Resources'), 'employee', 'active'
 WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'charlie');
 
 -- More staff so the quotas can actually be pushed over. Only alice and bob start
 -- with resources; everyone else is a candidate for an access request.
-INSERT INTO employees (username, password, full_name, department_id, role, status)
-SELECT v.username, v.username, v.full_name,
+INSERT INTO employees (username, full_name, department_id, role, status)
+SELECT v.username, v.full_name,
        (SELECT id FROM departments WHERE name = v.dept), 'employee', 'active'
 FROM (VALUES
         ('erin',   'Erin Engineer',   'Engineering'),
@@ -85,8 +86,8 @@ FROM (VALUES
 WHERE NOT EXISTS (SELECT 1 FROM employees e WHERE e.username = v.username);
 
 -- Un-onboarded hires (no department) for the onboarding flow.
-INSERT INTO employees (username, password, full_name, department_id, role, status)
-SELECT v.username, v.username, v.full_name, NULL, 'employee', 'active'
+INSERT INTO employees (username, full_name, department_id, role, status)
+SELECT v.username, v.full_name, NULL, 'employee', 'active'
 FROM (VALUES ('kate', 'Kate Newhire'), ('liam', 'Liam Newhire')) AS v(username, full_name)
 WHERE NOT EXISTS (SELECT 1 FROM employees e WHERE e.username = v.username);
 
@@ -130,8 +131,8 @@ WHERE s.resource_type IN ('laptop', 'account')
                   WHERE dq.department_id = d.id AND dq.service_id = s.id);
 
 -- Dave is hired but NOT yet in any department — used to demo the onboard flow.
-INSERT INTO employees (username, password, full_name, department_id, role, status)
-SELECT 'dave', 'dave', 'Dave Newhire', NULL, 'employee', 'active'
+INSERT INTO employees (username, full_name, department_id, role, status)
+SELECT 'dave', 'Dave Newhire', NULL, 'employee', 'active'
 WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'dave');
 
 -- Demo state: alice and bob already hold a laptop + account, with real asset tags.
@@ -163,3 +164,63 @@ WHERE a.assigned_to IS NOT NULL
 
 -- Default email for every account that lacks one (admin can edit these later).
 UPDATE employees SET email = username || '@servicejourney.local' WHERE email IS NULL;
+
+-- ------------------------------------------------------------- demo credentials
+-- Every seeded account starts with a TEMPORARY password equal to its username,
+-- given here only as an Argon2id hash. On first start the backend moves these
+-- hashes into Keycloak (which does the sign-in) and erases them from this table (argon2-cffi defaults = RFC 9106 low-memory
+-- profile: t=3, m=64 MiB, p=4). must_change_password forces the user to choose
+-- a strong password of their own at first sign-in. Only applied to accounts that
+-- have no password yet, so it never overwrites a password someone has set.
+UPDATE employees e SET password_hash = d.hash, must_change_password = TRUE
+FROM (VALUES
+        ('admin', '$argon2id$v=19$m=65536,t=3,p=4$IzxqXIX2emVomePWJOLB0g$KfAroyjN4eKq22IZ1BVb/HJNOi0yPXFTDwlea27m8AE'),
+        ('req', '$argon2id$v=19$m=65536,t=3,p=4$HPJZBKOVsloEu2+T6jxyRg$MYPg41VryfR9/4jvoBhy2pNO+Zznt4iydVxYHTLqHf4'),
+        ('hr', '$argon2id$v=19$m=65536,t=3,p=4$GcPfMh8/QHQpu2LXRfBXYQ$yH/qMoujnczrJYt0zZ8ccZrZoxVyhN2YsvCs5A6YOOg'),
+        ('director', '$argon2id$v=19$m=65536,t=3,p=4$CKCM4vEMqTa8CwRwYplH5g$HgzpDrRFptYOXNyYLLK5VfMWmesNiBbb9UfoC1aagfs'),
+        ('aa', '$argon2id$v=19$m=65536,t=3,p=4$3VQQyinr34g/Z6Wa7LqAGw$JknLzofkAkwMgu4jDdv4/2qYhQo1fjAkKo0iVg8GuzQ'),
+        ('itadmin', '$argon2id$v=19$m=65536,t=3,p=4$e3TRwZnf5UAnn81rHaucmA$r1rCpPMMcPOd+TSEJpqcmE6/yqzA5eOAS+xNGshez0I'),
+        ('euss', '$argon2id$v=19$m=65536,t=3,p=4$T1D2ZHGSrLVjTD7CVlW5Xw$p8cu6smTuvrPJXqYc47lHwModoSZC/w4XaxcnNlrQlI'),
+        ('alice', '$argon2id$v=19$m=65536,t=3,p=4$JJvhF3JjJ0lATjgF6TBAjw$0Lb7DYOVZwNo3HlmRppUj9k6BYpuk21eMKAe3QdD0Q4'),
+        ('bob', '$argon2id$v=19$m=65536,t=3,p=4$KCjK1o59hT01MFeAx3oEhQ$JoTGfZo+TsYRuQ0j3QZBVVldXxGOpcSCk7wmN0r10Gw'),
+        ('charlie', '$argon2id$v=19$m=65536,t=3,p=4$7oI7WKp5XtNXQPxTBbD1eQ$IQvmaZC+HoRTS1fe4yp0oYyL5m5+bpBLochsnGv3rHg'),
+        ('erin', '$argon2id$v=19$m=65536,t=3,p=4$AwJi03wdRFNJ65g8h9xeKg$5eHYTFzis82EVqNYdnQoLXC6BLED4fc+F01B6FHwn3c'),
+        ('frank', '$argon2id$v=19$m=65536,t=3,p=4$uMhzjEfUHlba0OdqbT2RMg$2eYlN11PvVjawQcZi6Zx7g5idL9VPxl+Indmmu2jDT0'),
+        ('grace', '$argon2id$v=19$m=65536,t=3,p=4$A7U9PjMwAF5XTj++8vEhrw$1rUMqDSSGK2wtwoAy87s6rsvl0wtukWtthz8cATiY/U'),
+        ('henry', '$argon2id$v=19$m=65536,t=3,p=4$ejB+QidnGm7TVeJ6rIG8eQ$X0k7lyiPkyjMe4mgNeRO/y8BDwE7hnHWR3v0nI8eSnc'),
+        ('ivy', '$argon2id$v=19$m=65536,t=3,p=4$RCMntBa8Xoyu+VGY83MPhQ$sRP26FuaIUe7cJQG3k/F3fcHYTqZNYuAWWylqZ+1ENc'),
+        ('jack', '$argon2id$v=19$m=65536,t=3,p=4$c6Ze9MNAK9DKr3QCGXbbfA$vGSPnDkMSPo9eB8rTdi+ky6s8hydSXhro7dBe1FNuew'),
+        ('kate', '$argon2id$v=19$m=65536,t=3,p=4$lD6Wsft3Z68A6xf4hk+VzA$pXZok4XI5rWK/cTw+QXMoSzutbt/KLBz8QFP5XH/qZg'),
+        ('liam', '$argon2id$v=19$m=65536,t=3,p=4$dvs4kebqnKXdVICxcgi+6A$KFeMx2Tuq0HQZj0ANCGJVppOwAYbCg4xDH0Iu9WolAM'),
+        ('dave', '$argon2id$v=19$m=65536,t=3,p=4$ypy46Ua1prRzNAYbgMRJlQ$5ESwgJZeq5DOPfkRAPjNh/eKQ++SJ/7v5KHZn2LHWwQ')
+     ) AS d(username, hash)
+WHERE e.username = d.username AND e.password_hash IS NULL AND e.keycloak_id IS NULL;
+
+-- ------------------------------------------------- MJR rotation clock (CHANGE 006)
+-- Demo tenures, RELATIVE to today so the demo works whenever the stack is started:
+--   alice + frank are past the 4-year mark (due), grace reaches it within ~2 months
+--   (due soon), everyone else is well inside. Only fills empty values, so it never
+--   overwrites a date set by a real onboard / shift.
+UPDATE employees e SET department_since = (CURRENT_DATE - v.tenure::interval)::date
+FROM (VALUES
+        ('alice',   '5 years 3 months'),
+        ('frank',   '4 years 2 months'),
+        ('grace',   '3 years 10 months'),
+        ('erin',    '3 years'),
+        ('ivy',     '2 years 6 months'),
+        ('bob',     '2 years'),
+        ('charlie', '1 year 6 months'),
+        ('henry',   '1 year'),
+        ('jack',    '8 months')
+     ) AS v(username, tenure)
+WHERE e.username = v.username AND e.department_id IS NOT NULL AND e.department_since IS NULL;
+
+-- Anyone else already in a department (e.g. an upgraded volume): start the clock
+-- from the last completed onboard / shift into that department, else from today.
+UPDATE employees e SET department_since = COALESCE(
+        (SELECT r.updated_at::date FROM requests r
+          WHERE r.target_employee_id = e.id AND r.type IN ('onboard', 'shift')
+            AND r.status = 'completed' AND r.target_department_id = e.department_id
+          ORDER BY r.updated_at DESC LIMIT 1),
+        CURRENT_DATE)
+WHERE e.department_id IS NOT NULL AND e.department_since IS NULL;

@@ -1,5 +1,5 @@
 """Admin identity management and IT-admin department->service mapping."""
-from flask import Blueprint, request, redirect, url_for, flash
+from flask import Blueprint, request, redirect, url_for, flash, render_template
 
 from . import role_required
 from ..backend_client import call, error_of
@@ -23,7 +23,40 @@ def create_employee():
         "department_id": int(request.form["department_id"]) if request.form.get("department_id") else None,
     }
     resp = call("POST", "/api/employees", json=payload)
-    flash("Account created." if resp.ok else error_of(resp), "ok" if resp.ok else "error")
+    if not resp.ok:
+        flash(error_of(resp), "error")
+        return _back()
+    temp = resp.json().get("temporary_password")
+    if temp:   # generated: show it ONCE, on this response only (never stored in a cookie)
+        return render_template("temporary_password.html", username=payload["username"],
+                               full_name=payload["full_name"], password=temp, created=True)
+    flash("Account created. The user must change the initial password at first sign-in.", "ok")
+    return _back()
+
+
+@bp.post("/employees/<int:emp_id>/password/reset")
+@role_required("admin")
+def reset_password(emp_id):
+    resp = call("POST", f"/api/employees/{emp_id}/password/reset", json={})
+    if not resp.ok:
+        flash(error_of(resp), "error")
+        return _back()
+    return render_template("temporary_password.html", username=request.form.get("username", ""),
+                           full_name=request.form.get("full_name", ""), password=resp.json()["temporary_password"],
+                           created=False)
+
+
+@bp.post("/employees/<int:emp_id>/sessions/revoke")
+@role_required("admin")
+def revoke_sessions(emp_id):
+    resp = call("POST", f"/api/employees/{emp_id}/sessions/revoke", json={})
+    if not resp.ok:
+        flash(error_of(resp), "error")
+    elif resp.json().get("keycloak_synced") is False:
+        flash("Signed out of the console and services. Keycloak is unreachable, so its sign-in session "
+              "will be ended automatically when it is back.", "ok")
+    else:
+        flash("Signed out everywhere.", "ok")
     return _back()
 
 
@@ -39,6 +72,10 @@ def update_employee(emp_id):
         body["department_id"] = int(request.form["department_id"]) if request.form.get("department_id") else None
     if request.form.get("status"):
         body["status"] = request.form["status"]
+    # Rotation clock start (CHANGE 006): only sent when the administrator changed it.
+    if "department_since" in request.form and \
+            request.form.get("department_since", "") != request.form.get("department_since_was", ""):
+        body["department_since"] = request.form.get("department_since", "").strip() or None
     resp = call("PUT", f"/api/employees/{emp_id}", json=body)
     flash("Updated." if resp.ok else error_of(resp), "ok" if resp.ok else "error")
     return _back()
@@ -49,6 +86,15 @@ def update_employee(emp_id):
 def delete_employee(emp_id):
     resp = call("DELETE", f"/api/employees/{emp_id}")
     flash("Deleted." if resp.ok else error_of(resp), "ok" if resp.ok else "error")
+    return _back()
+
+
+@bp.post("/employees/<int:emp_id>/mfa/reset")
+@role_required("admin")
+def reset_mfa(emp_id):
+    resp = call("POST", f"/api/employees/{emp_id}/mfa/reset", json={})
+    flash("Two-factor authentication reset — the user will set it up again at next sign-in."
+          if resp.ok else error_of(resp), "ok" if resp.ok else "error")
     return _back()
 
 

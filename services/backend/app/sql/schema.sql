@@ -1,6 +1,7 @@
 -- ServiceJourney POC — database schema
--- NOTE: passwords are stored in PLAINTEXT on purpose for this POC (per requirements).
---       Do NOT reuse this schema in anything real.
+-- Sign-in is handled by Keycloak (single sign-on): passwords and TOTP secrets live
+-- ONLY there. The credential columns below are kept solely so older volumes can be
+-- migrated into Keycloak by app/sync.py, which then erases them from this database.
 --
 -- This file is idempotent: CREATE TABLE IF NOT EXISTS + ALTER ... IF NOT EXISTS,
 -- so it safely upgrades an existing database volume as the model evolves.
@@ -32,11 +33,11 @@ CREATE TABLE IF NOT EXISTS department_access (
 CREATE TABLE IF NOT EXISTS employees (
     id            SERIAL PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE,
-    password      TEXT NOT NULL,               -- PLAINTEXT (POC only)
+    password_hash TEXT,                        -- Argon2id (PHC string); NULL = no password set
     full_name     TEXT NOT NULL,
     department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
     is_admin      BOOLEAN NOT NULL DEFAULT FALSE,  -- legacy; superseded by role
-    status        TEXT NOT NULL DEFAULT 'active'   -- 'active' | 'inactive'
+    status        TEXT NOT NULL DEFAULT 'active'   -- 'active' | 'inactive' | 'suspended' (shift)
 );
 
 -- Console role. Everyone is an 'employee' (a possible access subject); some
@@ -151,3 +152,133 @@ CREATE TABLE IF NOT EXISTS quota_requests (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- --------------------------------------------------------------------------- --
+-- LEGACY credential columns (CHANGE 001/002). Keycloak now owns passwords and
+-- TOTP; these only carry existing hashes / encrypted TOTP secrets until sync.py
+-- has moved them into Keycloak, after which they are set to NULL.
+-- --------------------------------------------------------------------------- --
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_enabled        BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_secret         TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_pending_secret TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_last_step      BIGINT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_failed_count   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_locked_until   TIMESTAMPTZ;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS mfa_enrolled_at    TIMESTAMPTZ;
+
+-- (Authentication events now live in the tamper-evident audit_log below; a legacy
+-- auth_events table from an older volume is migrated into it and dropped at start-up.)
+
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS password_hash        TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS password_changed_at  TIMESTAMPTZ;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS failed_login_count   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS locked_until         TIMESTAMPTZ;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_login_at        TIMESTAMPTZ;
+-- Old volumes: let rows exist without the legacy plaintext column being filled
+-- (the start-up migration hashes it and then drops it).
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'employees' AND column_name = 'password') THEN
+        ALTER TABLE employees ALTER COLUMN password DROP NOT NULL;
+    END IF;
+END $$;
+
+-- --------------------------------------------------------------------------- --
+-- Audit trail: tamper-evident and append-only
+-- --------------------------------------------------------------------------- --
+-- One row per security-relevant event (sign-ins, admin changes, quota changes,
+-- access checks, entitlement changes, workflow steps, asset custody, exports).
+--   * `payload` is the canonical JSON of the event and the only thing hashed;
+--     the other columns are copies for filtering (verification checks they match).
+--   * hash = HMAC-SHA256(AUDIT_HMAC_KEY, prev_hash || payload): editing, deleting
+--     or re-ordering any row breaks the chain from that point on.
+--   * No foreign keys on purpose: deleting an employee must never touch the log.
+CREATE TABLE IF NOT EXISTS audit_log (
+    seq            BIGINT PRIMARY KEY,           -- gap-free, assigned under a lock
+    ts             TIMESTAMPTZ NOT NULL,
+    category       TEXT NOT NULL,                -- auth | admin | config | quota | access | workflow | asset | audit
+    action         TEXT NOT NULL,
+    outcome        TEXT NOT NULL,                -- success | failure | denied
+    actor_id       INTEGER,
+    actor_username TEXT,
+    actor_role     TEXT,
+    target_type    TEXT,
+    target_id      TEXT,
+    target_label   TEXT,
+    ip             TEXT,
+    client         TEXT,
+    payload        TEXT NOT NULL,
+    prev_hash      TEXT NOT NULL,
+    hash           TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS audit_log_ts       ON audit_log (ts DESC);
+CREATE INDEX IF NOT EXISTS audit_log_category ON audit_log (category, ts DESC);
+CREATE INDEX IF NOT EXISTS audit_log_actor    ON audit_log (actor_username);
+
+-- Append-only, enforced by the database itself (applies to every role, including
+-- the table owner): any UPDATE, DELETE or TRUNCATE is rejected.
+CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_log is append-only: % is not permitted', TG_OP
+        USING ERRCODE = 'insufficient_privilege';
+END $$ LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER audit_log_no_update_delete
+    BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
+CREATE OR REPLACE TRIGGER audit_log_no_truncate
+    BEFORE TRUNCATE ON audit_log FOR EACH STATEMENT EXECUTE FUNCTION audit_log_append_only();
+
+-- --------------------------------------------------------------------------- --
+-- Single sign-on (Keycloak)
+-- --------------------------------------------------------------------------- --
+-- The employee's Keycloak account (the token `sub`), whether a change still has to
+-- be pushed to Keycloak (retried in the background if Keycloak is down), and the
+-- moment from which earlier access tokens are refused (immediate revocation).
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS keycloak_id          TEXT UNIQUE;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS kc_sync_pending      BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS tokens_revoked_after TIMESTAMPTZ;
+-- A "sign out everywhere" that could not reach Keycloak yet (retried in the background).
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS kc_logout_pending    BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Keycloak login/admin events already copied into audit_log (each exactly once).
+CREATE TABLE IF NOT EXISTS keycloak_ingested_events (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,              -- user | admin
+    ingested_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Superseded by Keycloak: its own sessions, reset e-mails and credentials.
+DROP TABLE IF EXISTS user_sessions;
+DROP TABLE IF EXISTS password_reset_tokens;
+DROP TABLE IF EXISTS mfa_recovery_codes;
+
+-- --------------------------------------------------------------------------- --
+-- Mandatory Job Rotation (MJR) tracker  (CHANGE 006)
+-- --------------------------------------------------------------------------- --
+-- When the officer joined their CURRENT department. Set when an onboard or shift
+-- request is processed (and when an administrator moves someone directly), so it
+-- is what the 4-year rotation clock runs from. rotation_alerted_at = when the
+-- Directors were last e-mailed that this officer is due (no repeat e-mails).
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_since    DATE;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS rotation_alerted_at TIMESTAMPTZ;
+
+-- A Director's decision for an officer who reached the rotation mark.
+--   keep   — stays, with a reason; reviewed again on review_after
+--   rotate — to be moved to target_department_id; a Requestor then raises the shift
+--            request (request_id), which goes through the normal approval workflow
+-- department_since copies the tenure the decision was about, so a completed shift
+-- (new department_since) automatically starts a fresh rotation clock.
+CREATE TABLE IF NOT EXISTS rotation_decisions (
+    id                   SERIAL PRIMARY KEY,
+    employee_id          INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    department_id        INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+    department_since     DATE,
+    decision             TEXT NOT NULL CHECK (decision IN ('keep', 'rotate')),
+    reason               TEXT,
+    target_department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+    review_after         DATE,
+    request_id           INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+    decided_by           INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    decided_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS rotation_decisions_emp ON rotation_decisions (employee_id, decided_at DESC);

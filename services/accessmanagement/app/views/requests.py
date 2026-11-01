@@ -59,6 +59,8 @@ def create():
     }
     if rtype in ("onboard", "shift"):
         payload["department_id"] = int(request.form["department_id"]) if request.form.get("department_id") else None
+    if rtype == "shift" and request.form.get("rotation_decision_id"):   # MJR (CHANGE 006)
+        payload["rotation_decision_id"] = int(request.form["rotation_decision_id"])
     else:
         payload["service_id"] = int(request.form["service_id"]) if request.form.get("service_id") else None
 
