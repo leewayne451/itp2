@@ -25,7 +25,8 @@ What changed
                                       only READ the results (plus UPDATE journey_control)
   services/backend/app/api/journey.py NEW GET /api/journey, POST /api/journey/refresh (staff roles)
   services/backend/app/__init__.py    registers the blueprint
-  services/accessmanagement/app/views/journey.py, templates/journey.html, static/journey.css  NEW page
+  services/accessmanagement/app/views/journey.py, templates/journey.html  NEW page (existing
+                                      style.css classes only: panels, detail rows, tables, pills)
   services/accessmanagement/app/__init__.py, templates/base.html   blueprint + "Service journey" link
   docker-compose.yml                  analytics service; ANALYTICS_DB_PASSWORD passed to backend
   scripts/generate_secrets.py         new secret ANALYTICS_DB_PASSWORD
