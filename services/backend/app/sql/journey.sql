@@ -3,7 +3,7 @@
 -- The analytics pipeline (services/analytics) reads request timestamps, works out how
 -- long each request spent at each stage, predicts open requests, and writes the
 -- results here. The backend only READS these tables (see db.provision_runtime_role)
--- and serves them to the console's "Turnaround analytics" page.
+-- and serves them to the console's "Analytics" page.
 --
 -- Idempotent like schema.sql: applied by the backend at every start-up.
 
