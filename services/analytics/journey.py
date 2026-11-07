@@ -13,12 +13,13 @@ out how long each request spent in each stage, then:
   * backtest()     — how good those predictions would have been on past requests
 
 Prediction method (kept deliberately simple and explainable for the POC):
-Monte Carlo over the EMPIRICAL stage durations of past requests. For a request that
-has been in stage S for `a` hours we sample "how much longer S takes, given it has
-already taken a" from past S durations longer than a, then add one sampled duration
-for every stage still ahead of it. Repeating this a few thousand times gives a
-distribution of the finish time: its median is the estimate, its 90th percentile a
-pessimistic bound, and the share of samples past the target is the risk of missing it.
+Monte Carlo over what happened to PAST requests. For a request that has been in
+stage S for `a` hours, look at past requests of the same type that spent more than
+`a` hours in S and take how much longer they still needed to complete; with too few
+such cases, fall back to "rest of S plus one sampled duration per stage still ahead".
+Drawing a few thousand samples gives a distribution of the finish time: its median
+is the estimate, its 90th percentile a pessimistic bound, and the share of samples
+past the target is the risk of missing it.
 """
 from __future__ import annotations
 
