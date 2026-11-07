@@ -27,6 +27,7 @@ services, and signing out of one signs out of all.
 | `service1` | [`services/service1`](services/service1) | 8081 | **Personal Laptop** resource (placeholder service) |
 | `service2` | [`services/service2`](services/service2) | 8082 | **Account** resource (placeholder service) |
 | `email` | [`services/email`](services/email) | 8090 | Notification service + **mailbox** web page (POC stand-in for real mail); also receives Keycloak's e-mails (SMTP, internal port 1025) |
+| `analytics` | [`services/analytics`](services/analytics) | — | **Analytics** pipeline (Pandas): where requests get stuck, at-risk requests and predicted finish, from the workflow's timestamps. No web port |
 
 ## Project structure
 
@@ -55,18 +56,23 @@ services/
       passwords.py             temporary-password generator, legacy plaintext migration
       audit.py                 tamper-evident append-only audit trail (HMAC chain, file copy, verify)
       rotation.py              Mandatory Job Rotation tracker (due check, e-mails, decisions)
-      api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py   (route blueprints)
-      sql/       schema.sql  seed.sql
+      api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py journey.py   (route blueprints)
+      sql/       schema.sql  seed.sql  journey.sql (analytics tables)
   accessmanagement/            server-rendered console (OIDC client "console")
     run.py
     app/
       __init__.py              app factory
       config.py  backend_client.py  labels.py
       oidc.py  oidc_client.py  token_store.py   (SSO sign-in, tokens kept server-side)
-      views/     auth.py dashboard.py requests.py admin.py quotas.py assets.py security.py audit.py rotations.py   (blueprints)
-      templates/ base.html login.html security.html dashboard/*.html …
+      views/     auth.py dashboard.py requests.py admin.py quotas.py assets.py security.py audit.py rotations.py journey.py   (blueprints)
+      templates/ base.html login.html security.html journey.html dashboard/*.html …
       static/    style.css  app.js  (small, generic UI glue only)
   service1/ service2/          demo services (OIDC clients "service1" / "service2", same oidc.py)
+  analytics/                   analytics pipeline container (CHANGE 007), no web port
+    pipeline.py                extract request timestamps, transform, load journey_* tables (every 60 s)
+    journey.py                 replays each request's steps: stage stats, bottleneck, predictions, backtest
+    demo_history.py            synthetic demo history in its own tables: seed / purge / status
+    test_journey.py            17 offline checks
 ```
 
 Actions use **POST → redirect → GET** with flash messages; the console talks to the
@@ -283,6 +289,43 @@ officer joins a department (onboard / shift processed)  -> department_since = th
 * **Tunables** (backend environment, optional): `MJR_ROTATION_YEARS` (4),
   `MJR_DUE_SOON_DAYS` (90), `MJR_KEEP_REVIEW_MONTHS` (12), `MJR_CHECK_INTERVAL_SECONDS`
   (3600 — the check also runs at start-up).
+
+## Analytics: bottleneck and turnaround prediction
+
+Every workflow step is already timestamped in `request_events`. The **Analytics** page
+(top bar, staff roles) uses those timestamps to show where requests get stuck, which open
+requests are at risk of missing their target turnaround, and when each one will probably
+be done. Nothing new is captured: it only reads what the workflow already records.
+
+```
+request_events (timestamps the workflow already records)
+   -> analytics container (Pandas pipeline, every 60 s, or at once on "Refresh now")
+        replays each request's steps and measures the time spent at each one,
+        predicts open requests from similar past requests, tests itself on past requests
+   -> journey_* tables -> backend GET /api/journey -> console "Analytics" page
+```
+
+| Section on the page | Shows |
+|---------------------|-------|
+| Summary | open requests; how many are past target, at risk or stuck; the main bottleneck |
+| Where requests get stuck | typical and slow (p90) time per step, share of queue time, requests waiting now; the largest share is the bottleneck; filter by request type |
+| Open requests (predicted finish) | likely and latest finish date, chance of missing the target, status: Past target · At risk · Stuck · On track |
+| Prediction accuracy | how the predictions compared with what really happened on past requests |
+
+* **Who:** HR, Director, AA, IT Admin, EUSS and Admin. Requestors and employees get 403
+  (the console hides the link, and the API refuses and audits the attempt).
+* **Targets** (submission to completed): grant and return 7 days, shift and onboarding
+  8 days. Change `JOURNEY_TARGET_HOURS` in `docker-compose.yml`.
+* **Data minimisation:** the container connects as its own database role, `sj_analytics`,
+  which can read only request IDs, types, statuses and timestamps (no names,
+  justifications, documents or audit trail) and write only its own `journey_*` tables.
+  The API role can read the results but not change them.
+* **Demo history:** a fresh POC has only a few requests, so
+  `docker compose exec analytics python demo_history.py seed` loads synthetic history into
+  separate tables. It never touches real requests, access or the audit trail, and its rows
+  are marked **demo** on the page. `purge` removes it.
+
+Details: [`services/analytics/README.md`](services/analytics/README.md).
 
 ## Resources & quota
 
@@ -518,6 +561,13 @@ until then). Open the console at <https://localhost:8080> and the services at
 <https://localhost:8081> / <https://localhost:8082>. The backend applies the schema,
 seeds, and creates / updates every account in Keycloak automatically on start.
 
+Optional, for the **Analytics** page: load demo history with
+`docker compose exec analytics python demo_history.py seed`
+(see [Analytics](#analytics-bottleneck-and-turnaround-prediction)).
+
+> **Upgrading to CHANGE 007 (Analytics):** run `python scripts/generate_secrets.py` once
+> (it adds `ANALYTICS_DB_PASSWORD`), then `docker compose up -d --build`.
+
 > **Upgrading from CHANGE 003 or earlier:** run `python scripts/generate_secrets.py` (adds
 > the Keycloak secrets) and `bash scripts/generate-certs.sh` (adds `keycloak` to the
 > certificate — re-import `certs/ca.crt` in your browser). Existing accounts, passwords
@@ -611,6 +661,8 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | POST | `/api/rotations/{employee_id}/decision` | director — `{"decision":"keep","reason":…}` or `{"decision":"rotate","department_id":…}` |
 | GET | `/api/rotations/planned` | requestor — rotate decisions waiting for a shift request |
 | POST | `/api/rotations/check` | hr — run the due check now (e-mails Directors) |
+| GET | `/api/journey?type=all\|grant\|return\|shift\|onboard` | hr, director, aa, it_admin, euss, admin — latest Analytics results |
+| POST | `/api/journey/refresh` | same roles — ask the analytics container to recompute now |
 | GET | `/api/quotas` | aa, it_admin, admin |
 | POST | `/api/quota-requests` | aa (propose new limit) |
 | GET | `/api/quota-requests` | aa, it_admin, admin |
