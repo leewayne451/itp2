@@ -106,7 +106,7 @@ services:
 
   # Service journey analytics (CHANGE 007): a Pandas ETL job, no web port. Reads only
   # request timestamps (column-level grants on requests / request_events), writes only
-  # the journey_* tables, which the backend serves to the console's "Service journey" page.
+  # the journey_* tables, which the backend serves to the console's "Turnaround analytics" page.
   analytics:
     build: ./services/analytics
     environment:

@@ -5,7 +5,7 @@ Service journey analytics pipeline (CHANGE 007) — the `analytics` container.
     Transform replay each request's journey, measure every stage, predict open requests
               (journey.py)
     Load      write the results to the journey_* tables, which the backend serves to
-              the console's "Service journey" page
+              the console's "Turnaround analytics" page
 
 It runs every ANALYTICS_INTERVAL_SECONDS, and straight away when someone presses
 "Refresh now" in the console (the backend sets journey_control.refresh_requested_at).

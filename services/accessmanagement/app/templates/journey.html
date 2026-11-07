@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}ServiceJourney — Service journey{% endblock %}
+{% block title %}ServiceJourney — Turnaround analytics{% endblock %}
 {% block content %}
 
 <section class="panel">
-  <div class="panel-head"><h2>Service journey</h2>
+  <div class="panel-head"><h2>Turnaround analytics</h2>
     <form method="post" action="{{ url_for('journey.refresh', type=rtype, show=show) }}" class="inline-form">
       <button class="btn-sm" type="submit" title="Ask the analytics service to recompute now">Refresh now</button>
     </form>

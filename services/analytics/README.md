@@ -11,7 +11,7 @@ requests / request_events ──(read: ids, types, statuses, timestamps only)─
                                                                               Pandas ETL, every 60 s
 journey_* tables ◀──(write: stage stats, predictions, backtest)───────────────┘
       │
-      └──(read-only)──▶ backend GET /api/journey ──▶ console "Service journey" page
+      └──(read-only)──▶ backend GET /api/journey ──▶ console "Turnaround analytics" page
                          (adds names for live requests)   (HR, Director, AA, IT Admin, EUSS, Admin)
 ```
 
@@ -56,7 +56,7 @@ docker compose exec analytics python demo_history.py seed
 docker compose exec analytics python test_journey.py     # 17 offline checks
 ```
 
-Then sign in as `director` (or HR / AA / IT Admin / EUSS / Admin) → **Service journey**.
+Then sign in as `director` (or HR / AA / IT Admin / EUSS / Admin) → **Turnaround analytics**.
 The seeded history has a slow Director stage that got slower over the last six weeks, so
 it shows up as the bottleneck. Raise a real request as `req`, approve a step or two, press
 **Refresh now**: it appears in the predictions with a link to its details.

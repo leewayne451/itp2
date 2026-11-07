@@ -11,7 +11,7 @@ Summary
   New `analytics` container (Pandas ETL, no web port) that uses the timestamps already in
   request_events to show where requests get stuck, flag open requests at risk of missing a
   target turnaround, and predict completion time from past requests. Results are shown on a
-  new console page "Service journey" (HR, Director, AA, IT Admin, EUSS, Admin).
+  new console page "Turnaround analytics" (HR, Director, AA, IT Admin, EUSS, Admin).
 
 What changed
   services/analytics/                 NEW container: journey.py (replay, stage stats, prediction,
@@ -27,7 +27,7 @@ What changed
   services/backend/app/__init__.py    registers the blueprint
   services/accessmanagement/app/views/journey.py, templates/journey.html  NEW page (existing
                                       style.css classes only: panels, detail rows, tables, pills)
-  services/accessmanagement/app/__init__.py, templates/base.html   blueprint + "Service journey" link
+  services/accessmanagement/app/__init__.py, templates/base.html   blueprint + "Turnaround analytics" link
   docker-compose.yml                  analytics service; ANALYTICS_DB_PASSWORD passed to backend
   scripts/generate_secrets.py         new secret ANALYTICS_DB_PASSWORD
 
