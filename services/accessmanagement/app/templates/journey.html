@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Service journey{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='journey.css') }}">{% endblock %}
+{% block content %}
+
+<section class="panel j-panel">
+  <div class="panel-head">
+    <h2>Service journey</h2>
+    <form method="post" action="{{ url_for('journey.refresh', type=rtype, show=show) }}" class="inline-form">
+      <button class="btn-sm" type="submit" title="Ask the analytics service to recompute now">Refresh now</button>
+    </form>
+  </div>
+  <p class="muted small">How long requests really spend at each step of the workflow, which open requests are
+    likely to miss their target turnaround, and when each one will probably be done. Worked out from the
+    timestamps of every workflow step by the analytics service; no names or justifications are read to do it.</p>
+
+  {% if not run %}
+    <div class="flash error">No results yet. The analytics service computes them every minute after it starts
+      {% if data.last_error %}— its last attempt failed ({{ data.last_error.at|dt }}): <code>{{ data.last_error.error }}</code>{% else %}— check that the <code>analytics</code> container is running{% endif %}.</div>
+  {% else %}
+    <div class="j-meta small muted">
+      Data as of <strong>{{ run.data_as_of|dt }}</strong> SGT
+      · {{ run.live_requests }} real request{{ '' if run.live_requests == 1 else 's' }}
+      {% if run.demo_requests %}· <span class="j-demo">+ {{ run.demo_requests }} demo history</span>{% endif %}
+      {% if data.last_error %}· <span class="j-err">last run failed {{ data.last_error.at|dt }}</span>{% endif %}
+    </div>
+    {% if run.demo_requests %}
+      <p class="small j-demo-note">Includes synthetic demo history (rows marked <span class="j-tag demo">demo</span>)
+        so the figures are not empty in the POC. It lives in its own tables and never touches real requests or access.</p>
+    {% endif %}
+
+    <div class="j-kpis">
+      <div class="j-kpi"><span class="j-kpi-n">{{ total_open }}</span><span class="j-kpi-l">open requests</span></div>
+      <div class="j-kpi {{ 'bad' if counts.breached }}"><span class="j-kpi-n">{{ counts.breached }}</span><span class="j-kpi-l">past target</span></div>
+      <div class="j-kpi {{ 'bad' if counts.at_risk }}"><span class="j-kpi-n">{{ counts.at_risk }}</span><span class="j-kpi-l">at risk of missing it</span></div>
+      <div class="j-kpi {{ 'wait' if counts.stuck }}"><span class="j-kpi-n">{{ counts.stuck }}</span><span class="j-kpi-l">stuck at a stage</span></div>
+      <div class="j-kpi wide">
+        <span class="j-kpi-n">{{ STAGE_LABEL.get(run.bottleneck_stage, run.bottleneck_stage or '—') }}</span>
+        <span class="j-kpi-l">main bottleneck (all request types)</span>
+      </div>
+    </div>
+  {% endif %}
+</section>
+
+{% if run %}
+<section class="panel j-panel">
+  <div class="panel-head">
+    <h2>Where requests get stuck</h2>
+    <nav class="j-tabs">
+      {% for t in data.types %}
+        <a href="{{ url_for('journey.index', type=t, show=show) }}" class="{{ 'on' if t == rtype }}">{{ 'All types' if t == 'all' else TYPE_LABEL.get(t, t) }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+  <p class="muted small">Time spent at each step by requests that finished that step in the last
+    {{ run.settings.lookback_days or 180 }} days. <em>Typical</em> is the median, <em>slow</em> the 90th percentile.
+    <em>Share</em> is how much of all queue time the step accounts for — the longest bar is the bottleneck.</p>
+  <div class="table-wrap">
+    <table class="j-stages">
+      <thead><tr><th>Step</th><th>Who acts</th><th>Typical</th><th>Slow (p90)</th><th class="j-share-h">Share of queue time</th><th>Waiting now</th><th>Longest waiting</th><th>Sample</th></tr></thead>
+      <tbody>
+        {% for s in stages %}
+        {% set is_bn = s.stage == run.bottleneck_stage and rtype == 'all' %}
+        <tr class="{{ 'j-bn' if is_bn }} {{ 'j-sched' if s.stage == 'scheduled_wait' }}">
+          <td>{{ STAGE_LABEL.get(s.stage, s.stage) }}{% if is_bn %} <span class="pill bad">bottleneck</span>{% endif %}
+            {% if s.stage == 'scheduled_wait' %}<div class="small muted">planned wait, not a queue</div>{% endif %}</td>
+          <td>{{ STAGE_OWNER.get(s.stage, '') }}</td>
+          <td class="nowrap">{{ s.median_h|hrs }}</td>
+          <td class="nowrap">{{ s.p90_h|hrs }}</td>
+          <td>
+            {% if s.share_pct is not none %}
+              <div class="j-share">
+                <span class="j-bar"><span style="width: {{ (100 * s.share_pct / max_share)|round(1) }}%"></span></span>
+                <span class="small">{{ s.share_pct|round|int }}%</span>
+              </div>
+            {% else %}<span class="small muted">—</span>{% endif %}
+          </td>
+          <td>{{ s.wip }}</td>
+          <td class="nowrap">{{ s.oldest_open_h|hrs }}</td>
+          <td class="small muted">{{ s.n }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel j-panel">
+  <div class="panel-head">
+    <h2>Open requests — predicted finish</h2>
+    <nav class="j-tabs">
+      <a href="{{ url_for('journey.index', type=rtype, show='flagged') }}" class="{{ 'on' if show != 'all' }}">Needs attention</a>
+      <a href="{{ url_for('journey.index', type=rtype, show='all') }}" class="{{ 'on' if show == 'all' }}">All open</a>
+    </nav>
+  </div>
+  <p class="muted small">Targets (submission to completion):
+    {% for t, h in (run.settings.target_hours or {}).items() %}{{ TYPE_LABEL.get(t, t) }} {{ h|hrs }}{{ ', ' if not loop.last }}{% endfor %}.
+    <em>Likely done</em> is the median prediction; <em>latest</em> the 90th percentile. <em>Risk</em> is the predicted chance of
+    finishing after the target; a request is <em>at risk</em> from {{ ((run.settings.risk_threshold or 0.5) * 100)|round|int }}%.
+    <em>Stuck</em> means it has already been at its current step longer than 9 in 10 past requests were.</p>
+  <div class="table-wrap">
+    <table class="j-preds" data-testid="journey-predictions">
+      <thead><tr><th>#</th><th>Type</th><th>For</th><th>Current step</th><th>Elapsed / target</th><th>Likely done</th><th>Latest</th><th>Risk</th><th>Status</th></tr></thead>
+      <tbody>
+        {% if not preds %}<tr><td colspan="9" class="muted">{{ 'No open requests need attention.' if show != 'all' else 'No open requests.' }}</td></tr>{% endif %}
+        {% for p in preds %}
+        {% set f = FLAG.get(p.flag, (p.flag, 'wait')) %}
+        <tr>
+          <td class="nowrap">
+            {% if p.source == 'live' %}<a href="{{ url_for('requests.detail', rid=p.request_id) }}">{{ p.request_id }}</a>
+            {% else %}<span class="j-tag demo" title="Synthetic demo history">demo</span> {{ p.request_id }}{% endif %}
+          </td>
+          <td><span class="type-tag {{ p.request_type }}">{{ p.request_type }}</span></td>
+          <td>{% if p.source == 'live' %}{{ p.target_name or '—' }}
+                <div class="small muted">{{ p.service_name or (('→ ' ~ p.new_department_name) if p.new_department_name else '') }}</div>
+              {% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{{ STAGE_LABEL.get(p.stage, p.stage) }}<div class="small muted">for {{ p.stage_age_h|hrs }}</div></td>
+          <td class="j-progress-cell">
+            {% set pc = [100, 100 * p.elapsed_h / p.target_h]|min %}
+            <span class="j-progress {{ 'over' if p.elapsed_h > p.target_h }}"><span style="width: {{ pc|round(1) }}%"></span></span>
+            <span class="small nowrap">{{ p.elapsed_h|hrs }} / {{ p.target_h|hrs }}</span>
+          </td>
+          <td class="nowrap">{{ p.eta_p50|dt }}<div class="small muted">in {{ p.remaining_p50_h|hrs }}</div></td>
+          <td class="nowrap small">{{ p.eta_p90|dt }}</td>
+          <td class="nowrap">{{ p.risk_miss|pct }}</td>
+          <td><span class="pill {{ f[1] }}">{{ f[0] }}</span>
+            {% if p.stuck and p.flag != 'stuck' %}<div class="small muted">also stuck</div>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel j-panel">
+  <div class="panel-head"><h2>How good are the predictions?</h2></div>
+  {% set bt = run.backtest %}
+  {% if bt.points %}
+  <p class="muted small">Replayed on {{ bt.requests }} finished requests: at each of {{ bt.points }} moments a request moved
+    to a new step, the finish time was predicted using only requests that had finished before then, and compared with
+    what really happened.</p>
+  <div class="j-kpis">
+    <div class="j-kpi"><span class="j-kpi-n">{{ bt.mae_h|hrs }}</span><span class="j-kpi-l">average error</span></div>
+    <div class="j-kpi"><span class="j-kpi-n">{{ bt.baseline_mae_h|hrs }}</span><span class="j-kpi-l">error of "typical cycle time minus time so far"</span></div>
+    <div class="j-kpi"><span class="j-kpi-n">{{ bt.p90_coverage|pct }}</span><span class="j-kpi-l">finished before the "latest" estimate (aim: 90%)</span></div>
+    <div class="j-kpi"><span class="j-kpi-n">{{ bt.risk_precision|pct }}</span><span class="j-kpi-l">of "at risk" flags were right (the request did end up late)</span></div>
+    <div class="j-kpi"><span class="j-kpi-n">{{ bt.risk_recall|pct }}</span><span class="j-kpi-l">of checks on requests that ended up late had already flagged them</span></div>
+  </div>
+  <p class="muted small">Method: for a request at a step, look at past requests of the same type that spent at least as
+    long at that step and see how much longer they took to finish (falling back to adding up typical step times when
+    there are too few such cases). Durations are calendar time. A request that stalls suddenly cannot be foreseen,
+    which is why not every late request is flagged early.</p>
+  {% else %}
+  <p class="muted small">Not enough finished requests yet to test the predictions against.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

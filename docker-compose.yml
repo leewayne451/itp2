@@ -9,6 +9,7 @@
 #   service1          — demo protected service (services/service1)
 #   service2          — demo protected service (services/service2)
 #   email             — mailbox + SMTP relay (services/email)
+#   analytics         — service journey analytics pipeline (services/analytics, CHANGE 007)
 #
 # Secrets (database passwords, signing keys, client secrets, Keycloak admin) are
 # NOT in this file: they come from the git-ignored .env, created/completed with
@@ -69,6 +70,9 @@ services:
       MFA_REQUIRED_ROLES: ${MFA_REQUIRED_ROLES:-admin,requestor,hr,director,aa,it_admin,euss}
       # Only used to migrate TOTP enrolments made before Keycloak (CHANGE 001-003).
       MFA_ENC_KEY: ${MFA_ENC_KEY:-}
+      # The backend creates the analytics container's least-privilege role (CHANGE 007).
+      ANALYTICS_DB_USER: sj_analytics
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?run python scripts/generate_secrets.py}
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,6 +102,30 @@ services:
       # notifications and Keycloak e-mails land here. Bound to 127.0.0.1 ONLY, because the
       # mailbox shows password-reset links and has no sign-in: never publish it on 0.0.0.0.
       - "127.0.0.1:8090:5000"
+    networks: [appnet]
+
+  # Service journey analytics (CHANGE 007): a Pandas ETL job, no web port. Reads only
+  # request timestamps (column-level grants on requests / request_events), writes only
+  # the journey_* tables, which the backend serves to the console's "Service journey" page.
+  analytics:
+    build: ./services/analytics
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: accessmgmt
+      ANALYTICS_DB_USER: sj_analytics
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?run python scripts/generate_secrets.py}
+      ANALYTICS_INTERVAL_SECONDS: ${ANALYTICS_INTERVAL_SECONDS:-60}
+      # Target turnaround per request type, submission -> completed, in calendar hours.
+      JOURNEY_TARGET_HOURS: ${JOURNEY_TARGET_HOURS:-grant=168,return=168,shift=192,onboard=192}
+      # Flag a request "at risk" when the predicted chance of missing its target is at least this.
+      JOURNEY_RISK_THRESHOLD: ${JOURNEY_RISK_THRESHOLD:-0.5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started   # the backend creates the tables and the role at start-up
+    restart: unless-stopped
     networks: [appnet]
 
   keycloak-db:

@@ -1,0 +1,44 @@
+/* Service journey analytics page (CHANGE 007). Builds on style.css variables. */
+/* Let wide tables scroll inside their panel instead of stretching the page on a phone. */
+.j-panel { min-width: 0; }
+.j-panel .panel-head { flex-wrap: wrap; gap: .5rem; }
+.j-meta { margin: .4rem 0 .2rem; }
+.j-demo { color: #a16207; font-weight: 600; }
+.j-err { color: var(--danger); font-weight: 600; }
+.j-demo-note { background: #fefce8; border: 1px solid #fde68a; color: #854d0e; border-radius: 8px; padding: .45rem .7rem; margin: .5rem 0 0; }
+.j-tag { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .08rem .35rem; border-radius: 4px; }
+.j-tag.demo { background: #fef3c7; color: #92400e; }
+
+.j-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .7rem; margin-top: .8rem; }
+.j-kpi { border: 1px solid var(--line); border-radius: var(--radius); padding: .7rem .8rem; display: grid; gap: .15rem; align-content: start; }
+.j-kpi.wide { grid-column: span 2; }
+.j-kpi-n { font-size: 1.45rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.j-kpi.wide .j-kpi-n { font-size: 1.1rem; }
+.j-kpi-l { font-size: .76rem; color: var(--muted); }
+.j-kpi.bad { border-color: #fecaca; background: #fef2f2; }
+.j-kpi.bad .j-kpi-n { color: var(--danger); }
+.j-kpi.wait { border-color: #fde68a; background: #fefce8; }
+.j-kpi.wait .j-kpi-n { color: #a16207; }
+
+.j-tabs { display: flex; gap: .25rem; flex-wrap: wrap; }
+.j-tabs a { font-size: .8rem; padding: .25rem .6rem; border-radius: 999px; text-decoration: none; color: var(--muted); border: 1px solid transparent; }
+.j-tabs a:hover { border-color: var(--line); }
+.j-tabs a.on { background: #eef2ff; color: var(--brand); font-weight: 600; }
+
+.j-stages td, .j-preds td { font-variant-numeric: tabular-nums; }
+.j-share-h { min-width: 11rem; }
+.j-share { display: flex; align-items: center; gap: .5rem; }
+.j-bar { flex: 1; height: .55rem; background: #f1f5f9; border-radius: 999px; overflow: hidden; min-width: 5rem; }
+.j-bar > span { display: block; height: 100%; background: var(--brand); border-radius: 999px; }
+.j-bn td { background: #fef2f2; }
+.j-bn .j-bar > span { background: var(--danger); }
+.j-sched td { color: var(--muted); }
+
+.j-progress-cell { min-width: 9rem; }
+.j-progress { display: block; height: .45rem; background: #f1f5f9; border-radius: 999px; overflow: hidden; margin-bottom: .2rem; }
+.j-progress > span { display: block; height: 100%; background: var(--ok); }
+.j-progress.over > span { background: var(--danger); }
+
+@media (max-width: 640px) {
+  .j-kpi.wide { grid-column: auto; }
+}

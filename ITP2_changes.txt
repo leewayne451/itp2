@@ -5,6 +5,48 @@ and how it was verified. Newest entry at the top. Times are Singapore (SGT, UTC+
 
 
 -------------------------------------------------------------------------------
+[2026-11-07 SGT]  CHANGE 007 — Service journey analytics and bottleneck prediction
+-------------------------------------------------------------------------------
+Summary
+  New `analytics` container (Pandas ETL, no web port) that uses the timestamps already in
+  request_events to show where requests get stuck, flag open requests at risk of missing a
+  target turnaround, and predict completion time from past requests. Results are shown on a
+  new console page "Service journey" (HR, Director, AA, IT Admin, EUSS, Admin).
+
+What changed
+  services/analytics/                 NEW container: journey.py (replay, stage stats, prediction,
+                                      backtest), pipeline.py (extract/transform/load loop),
+                                      demo_history.py (synthetic demo history), test_journey.py,
+                                      Dockerfile, requirements.txt, README.md
+  services/backend/app/sql/journey.sql  NEW journey_runs / journey_stage_stats / journey_predictions /
+                                      journey_control / journey_demo_* tables
+  services/backend/app/db.py          applies journey.sql; new role sj_analytics (column-level SELECT
+                                      on requests + request_events, owns journey_* only); sj_app can
+                                      only READ the results (plus UPDATE journey_control)
+  services/backend/app/api/journey.py NEW GET /api/journey, POST /api/journey/refresh (staff roles)
+  services/backend/app/__init__.py    registers the blueprint
+  services/accessmanagement/app/views/journey.py, templates/journey.html, static/journey.css  NEW page
+  services/accessmanagement/app/__init__.py, templates/base.html   blueprint + "Service journey" link
+  docker-compose.yml                  analytics service; ANALYTICS_DB_PASSWORD passed to backend
+  scripts/generate_secrets.py         new secret ANALYTICS_DB_PASSWORD
+
+To apply
+  python scripts/generate_secrets.py
+  docker compose up -d --build backend analytics accessmanagement
+  docker compose exec analytics python demo_history.py seed      (optional demo history)
+
+Verification (local Postgres 16 + pinned pandas 2.2.3 / numpy 2.1.3; Docker not run)
+  - test_journey.py: 17/17 pass (replay, EUSS split, bottleneck, flags, reproducibility, backtest).
+  - Real workflow API (token check stubbed): 3 grant requests raised / approved / rejected,
+    pipeline run, /api/journey lists the 2 open ones with names, drops the rejected one;
+    requestor -> 403, employee -> 403, no token -> 401; "Refresh now" triggers a run within 5 s.
+  - sj_analytics: SELECT requests.justification -> permission denied; employees -> denied.
+    sj_app: DELETE FROM journey_predictions -> permission denied.
+  - Demo history (seed 7): bottleneck = Director approval; backtest MAE 26 h vs 33 h baseline,
+    84% of finishes before the p90 estimate.
+  - Console page rendered at 1280 px and 390 px.
+
+-------------------------------------------------------------------------------
 [2026-11-01 21:55 SGT]  CHANGE 006 follow-up 3 — MJR e-mails missing from the mailbox
 -------------------------------------------------------------------------------
 Cause
