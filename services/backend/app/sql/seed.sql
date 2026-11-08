@@ -162,6 +162,15 @@ FROM assets a
 WHERE a.assigned_to IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM asset_events);
 
+-- The automation account the HR-system webhook raises requests as (CHANGE 008). It is the
+-- "requestor" shown on those requests. It cannot sign in (inactive, never synced to Keycloak,
+-- no credentials) and has an empty e-mail address so nothing is ever mailed to it.
+INSERT INTO employees (username, full_name, role, status, email, kc_sync_pending)
+SELECT 'hr-system', 'HR System (Automated)', 'system', 'inactive', '', FALSE
+WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'hr-system');
+UPDATE employees SET role = 'system', status = 'inactive', kc_sync_pending = FALSE, email = ''
+WHERE username = 'hr-system';
+
 -- Default email for every account that lacks one (admin can edit these later).
 UPDATE employees SET email = username || '@servicejourney.local' WHERE email IS NULL;
 

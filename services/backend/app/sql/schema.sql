@@ -282,3 +282,22 @@ CREATE TABLE IF NOT EXISTS rotation_decisions (
     decided_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS rotation_decisions_emp ON rotation_decisions (employee_id, decided_at DESC);
+
+-- --------------------------------------------------------------------------- --
+-- HR-system webhook  (CHANGE 008)
+-- --------------------------------------------------------------------------- --
+-- One row per event the HR system (HRMS / ServiceNow HRSD) has sent. event_id is the
+-- HR system's own id: it makes delivery idempotent (a retry or replay is answered from
+-- here instead of raising the request twice). status: received | processed | rejected | failed.
+CREATE TABLE IF NOT EXISTS hr_events (
+    id                SERIAL PRIMARY KEY,
+    event_id          TEXT NOT NULL UNIQUE,
+    event_type        TEXT NOT NULL,              -- hire | transfer | resign
+    employee_username TEXT,
+    payload           TEXT NOT NULL,              -- the exact body received
+    status            TEXT NOT NULL DEFAULT 'received',
+    result            TEXT,                       -- JSON: what was done, or why it was refused
+    received_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    processed_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS hr_events_received ON hr_events (received_at DESC);

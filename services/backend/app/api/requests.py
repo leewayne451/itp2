@@ -8,7 +8,7 @@ from ..core import (
     get_request, get_joined, set_status, add_event, attach_documents, validate_documents,
     request_dict, load_stage, has_access, grant_access, revoke_access,
     service_by_type, service_names, department_effective_services, quota_overages,
-    revoke_with_dependents,
+    revoke_with_dependents, is_system_actor_id,
     employee_asset_kinds_needed, held_assets, assign_asset, release_unneeded_assets,
 )
 
@@ -159,7 +159,9 @@ def my_queue():
         return jsonify([])
     rows = db.query(REQ_SELECT + " WHERE r.status = ANY(%s) ORDER BY r.created_at", (statuses,))
     if role == "requestor":  # the appointment queue belongs to the owning requestor
-        rows = [r for r in rows if r["requestor_id"] == g.user["id"]]
+        # ...except requests the HR-system account raised: nobody can sign in as it, so any
+        # Requestor may pick those up and book the appointment.
+        rows = [r for r in rows if r["requestor_id"] == g.user["id"] or is_system_actor_id(r["requestor_id"])]
     return jsonify([request_dict(r) for r in rows])
 
 
@@ -188,13 +190,20 @@ def all_requests():
     return jsonify([request_dict(r) for r in db.query(REQ_SELECT + " ORDER BY r.created_at DESC")])
 
 
+def _may_view(requestor_id):
+    """Staff see every request; a Requestor sees their own and the HR system's."""
+    if g.user["role"] in STAFF_ROLES or requestor_id == g.user["id"]:
+        return True
+    return g.user["role"] == "requestor" and is_system_actor_id(requestor_id)
+
+
 @bp.get("/api/requests/<int:rid>")
 @require_auth
 def request_detail(rid):
     row = get_joined(rid)
     if not row:
         return jsonify(error="Request not found"), 404
-    if g.user["role"] not in STAFF_ROLES and row["requestor_id"] != g.user["id"]:
+    if not _may_view(row["requestor_id"]):
         return jsonify(error="Forbidden"), 403
     return jsonify(request_dict(row, with_events=True))
 
@@ -207,7 +216,7 @@ def get_document(doc_id):
                       WHERE d.id=%s""", (doc_id,), fetch="one")
     if not doc:
         return jsonify(error="Document not found"), 404
-    if g.user["role"] not in STAFF_ROLES and doc["requestor_id"] != g.user["id"]:
+    if not _may_view(doc["requestor_id"]):
         return jsonify(error="Forbidden"), 403
     return jsonify(filename=doc["filename"], content_base64=doc["content_base64"])
 
@@ -226,6 +235,11 @@ def approve(rid):
         return jsonify(error=f"Cannot approve at stage '{status}'"), 409
     if g.user["role"] != STATE_ROLE[status]:
         return jsonify(error=f"This step requires role '{STATE_ROLE[status]}'"), 403
+    if req["target_employee_id"] == g.user["id"]:
+        audit.record("workflow", "request_self_approval_blocked", outcome="denied",
+                     target_type="request", target_id=rid,
+                     target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
+        return jsonify(error="You can't approve a request that is about you (separation of duties)."), 403
     set_status(rid, APPROVAL_NEXT[status])
     add_event(rid, g.user["id"], "approved", f"Approved by {g.user['role']}")
     return jsonify(request_dict(get_joined(rid)))
@@ -242,6 +256,11 @@ def reject(rid):
         return jsonify(error=f"Cannot reject at stage '{status}'"), 409
     if g.user["role"] != STATE_ROLE[status]:
         return jsonify(error="Not your stage to reject"), 403
+    if req["target_employee_id"] == g.user["id"]:
+        audit.record("workflow", "request_self_approval_blocked", outcome="denied",
+                     target_type="request", target_id=rid,
+                     target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
+        return jsonify(error="You can't reject a request that is about you (separation of duties)."), 403
     reason = (request.get_json(silent=True) or {}).get("reason", "").strip() or "No reason given"
     db.query("UPDATE requests SET status='rejected', reject_reason=%s, updated_at=now() WHERE id=%s", (reason, rid), fetch=None)
     if req["type"] == "shift":  # a rejected shift lifts the suspension
@@ -351,7 +370,7 @@ def book_appointment(rid):
     req, err = load_stage(rid, "pending_appointment")
     if err:
         return err
-    if req["requestor_id"] != g.user["id"]:
+    if req["requestor_id"] != g.user["id"] and not is_system_actor_id(req["requestor_id"]):
         return jsonify(error="Only the requestor who raised this may book the appointment"), 403
     when = (request.get_json(silent=True) or {}).get("appointment_at")
     if not when:

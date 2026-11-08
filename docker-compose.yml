@@ -10,6 +10,8 @@
 #   service2          — demo protected service (services/service2)
 #   email             — mailbox + SMTP relay (services/email)
 #   analytics         — service journey analytics pipeline (services/analytics, CHANGE 007)
+#   hrms              — stand-in HR system of record; sends signed joiner/mover/leaver
+#                       webhooks to the backend (services/hrms, CHANGE 008)
 #
 # Secrets (database passwords, signing keys, client secrets, Keycloak admin) are
 # NOT in this file: they come from the git-ignored .env, created/completed with
@@ -73,6 +75,10 @@ services:
       # The backend creates the analytics container's least-privilege role (CHANGE 007).
       ANALYTICS_DB_USER: sj_analytics
       ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?run python scripts/generate_secrets.py}
+      # HR system webhook (CHANGE 008): events from the hrms container are accepted only when
+      # signed with this shared secret.
+      HR_WEBHOOK_SECRET: ${HRMS_WEBHOOK_SECRET:?run python scripts/generate_secrets.py}
+      CONSOLE_URL: https://localhost:8080
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,6 +132,26 @@ services:
       backend:
         condition: service_started   # the backend creates the tables and the role at start-up
     restart: unless-stopped
+    networks: [appnet]
+
+  # Stand-in for the HR system of record / ServiceNow HRSD (CHANGE 008). HR records a hire,
+  # transfer or resignation here; it sends a signed webhook to the backend, which raises the
+  # onboard / shift / return request automatically (a resignation also trips the kill switch).
+  hrms:
+    build: ./services/hrms
+    volumes:
+      - ./certs:/certs:ro
+      - hrmsdata:/data            # the HR record (people + events) survives rebuilds
+    environment:
+      BACKEND_URL: https://backend:5000
+      HRMS_WEBHOOK_SECRET: ${HRMS_WEBHOOK_SECRET:?run python scripts/generate_secrets.py}
+      HRMS_DATA_FILE: /data/hrms.json
+      HRMS_DEPARTMENTS: Engineering,Sales,Human Resources
+    depends_on: [backend]
+    restart: unless-stopped
+    ports:
+      # Demo UI with no sign-in: bound to 127.0.0.1 ONLY (like the mailbox). Never publish on 0.0.0.0.
+      - "127.0.0.1:8091:5000"
     networks: [appnet]
 
   keycloak-db:
@@ -248,6 +274,7 @@ volumes:
   auditlog:
   kcdata:
   mailbox:
+  hrmsdata:
 
 networks:
   appnet:

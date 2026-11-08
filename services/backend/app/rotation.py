@@ -58,7 +58,7 @@ _BASE = f"""
     LEFT JOIN departments td ON td.id = ld.target_department_id
     LEFT JOIN requests rq ON rq.id = ld.request_id
     LEFT JOIN employees dm ON dm.id = ld.decided_by
-    WHERE e.role = 'employee' AND e.department_since IS NOT NULL
+    WHERE e.role = 'employee' AND e.department_since IS NOT NULL AND e.status <> 'inactive'
 """
 
 

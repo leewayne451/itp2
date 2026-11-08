@@ -36,6 +36,7 @@ SECRETS = [
     ("POSTGRES_PASSWORD", _token, "database owner password (schema/migrations at start-up)"),
     ("APP_DB_PASSWORD", _token, "restricted runtime database role (sj_app) used by every API request"),
     ("ANALYTICS_DB_PASSWORD", _token, "analytics container's read-mostly database role (sj_analytics, CHANGE 007)"),
+    ("HRMS_WEBHOOK_SECRET", _token, "signs the HR system's joiner/mover/leaver webhooks to the backend (CHANGE 008)"),
     ("AUDIT_HMAC_KEY", _token, "seals the audit-trail hash chain (keep it; changing it breaks verification)"),
     ("MFA_ENC_KEY", _fernet_key, "legacy: decrypts pre-Keycloak TOTP secrets so they can be migrated"),
     ("CONSOLE_SECRET_KEY", _token, "signs the console's session cookie"),

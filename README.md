@@ -27,6 +27,7 @@ services, and signing out of one signs out of all.
 | `service1` | [`services/service1`](services/service1) | 8081 | **Personal Laptop** resource (placeholder service) |
 | `service2` | [`services/service2`](services/service2) | 8082 | **Account** resource (placeholder service) |
 | `email` | [`services/email`](services/email) | 8090 | Notification service + **mailbox** web page (POC stand-in for real mail); also receives Keycloak's e-mails (SMTP, internal port 1025) |
+| `hrms` | [`services/hrms`](services/hrms) | 8091 (127.0.0.1 only) | **HR system of record** (demo stand-in for ServiceNow HRSD): record a hire / transfer / resignation and it sends a signed webhook that raises the onboard / shift / return request automatically |
 | `analytics` | [`services/analytics`](services/analytics) | — | **Analytics** pipeline (Pandas): where requests get stuck, at-risk requests and predicted finish, from the workflow's timestamps. No web port |
 
 ## Project structure
@@ -47,6 +48,7 @@ services/
     app/
       __init__.py              app factory (registers blueprints)
       config.py  db.py  mailer.py  core.py     (config, DB, email, domain logic)
+      hr_events.py  workflows.py               (HR webhook signature/validation; request creation for automated flows)
       tokens.py                validates Keycloak access tokens (RS256 / JWKS, iss, aud, azp)
       auth.py                  require_auth / require_role (token -> employee, revocation, MFA)
       keycloak.py              Keycloak admin REST client (service account)
@@ -56,7 +58,7 @@ services/
       passwords.py             temporary-password generator, legacy plaintext migration
       audit.py                 tamper-evident append-only audit trail (HMAC chain, file copy, verify)
       rotation.py              Mandatory Job Rotation tracker (due check, e-mails, decisions)
-      api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py journey.py   (route blueprints)
+      api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py journey.py   (route blueprints; hr.py = HR webhook)
       sql/       schema.sql  seed.sql  journey.sql (analytics tables)
   accessmanagement/            server-rendered console (OIDC client "console")
     run.py
@@ -68,6 +70,8 @@ services/
       templates/ base.html login.html security.html journey.html dashboard/*.html …
       static/    style.css  app.js  (small, generic UI glue only)
   service1/ service2/          demo services (OIDC clients "service1" / "service2", same oidc.py)
+  hrms/                        HR system of record stand-in (CHANGE 008): UI + signed webhook sender
+    app.py  templates/index.html
   analytics/                   analytics pipeline container (CHANGE 007), no web port
     pipeline.py                extract request timestamps, transform, load journey_* tables (every 60 s)
     journey.py                 replays each request's steps: stage stats, bottleneck, predictions, backtest
@@ -244,8 +248,71 @@ Requestor submits
   AA → IT Admin, plus EUSS and admin oversight) sees the **reason given** by the
   requestor directly in their queue, alongside who raised it and whether it was raised
   on someone's behalf.
+* **Separation of duties (CHANGE 009):** nobody can approve, reject or process a request
+  that is **about themselves**. The action is refused with a 403 ("You can't approve a request
+  that is about you"), the request stays where it is, and the attempt is audited as
+  `request_self_approval_blocked`. Normally the target is an ordinary employee and the approver a
+  staff account, so this only bites if the target's role changes after the request was raised:
+  to see it, raise a request for an employee, have the Administrator set that employee's role to
+  **HR**, then sign in as them and click Approve or Reject.
 * The admin can no longer grant/remove access directly — it only happens through
   the workflow. Every user carries a **department**, shown throughout the console.
+
+## HR system: event-driven joiner / mover / leaver
+
+Until now every onboard, shift and return request was typed in by a Requestor. The **`hrms`**
+container stands in for the HR system of record (or ServiceNow HRSD): when HR records a
+**hire**, a **transfer** or a **resignation** there, it sends a signed webhook to the backend,
+which raises the right request by itself.
+
+```
+HRMS (https://localhost:8091)  --signed POST /api/hr/events-->  backend
+   hire      ->  create the employee (if new)  ->  ONBOARD request
+   transfer  ->                                    SHIFT request
+   resign    ->  KILL SWITCH first             ->  RETURN request
+```
+
+| Event | What the backend does |
+|-------|----------------------|
+| `hire` | Creates the employee (no department, Keycloak account with **no password**; they get a welcome e-mail and use *Forgot Password?*), then raises an **onboard** request into the department HR named. If the person already exists *without* a department (`dave`, `kate`, `liam`) it only raises the onboarding. |
+| `transfer` | Raises a **shift** request (same behaviour as a human-raised shift: the employee is suspended while it is in flight). |
+| `resign` | **1. Kill switch:** the employee is set `inactive`, every access token and service session is refused at once, and Keycloak disables the account and signs them out of every app (retried in the background if Keycloak is down). **2.** Any other open request for them (onboard / shift / grant) is closed, so nobody can process it and re-activate a leaver. **3.** One **return** request is raised for the account service, which takes back the laptop **and** the account (both assets). The kill switch is applied and audited *before* the return request exists, and is never undone by a later failure. Entitlements stay in place until EUSS retrieves them, but every service already denies an inactive employee. |
+
+**The requestor is the system actor.** Requests raised this way show **HR System (Automated)**
+(account `hr-system`, role `system`) as requestor in the console, the request timeline and the
+audit trail. That account cannot sign in: it is `inactive`, never synced to Keycloak, has no
+credentials and no e-mail address, and the Administrator cannot edit or delete it. The requests
+still travel the full chain (HR → Director → AA → IT → appointment → EUSS). Because nobody can
+sign in as the system actor, **every Requestor** gets the *ACTION REQUIRED* e-mail and sees the
+*appointment* step for these requests in their queue; whoever books it appears in the history.
+
+**Delivery.** The HRMS signs each event: `X-HR-Signature: sha256=HMAC_SHA256(HRMS_WEBHOOK_SECRET, "<X-HR-Timestamp>." + body)`.
+The backend refuses a bad signature or a timestamp more than 5 minutes off (replay), validates
+the payload, and processes each `event_id` **once**: a retry or replay is answered from the
+`hr_events` table (`duplicate: true`) and never raises a second request. A transient failure
+(`5xx`, backend down) is retried by the HRMS with the same event id; a `422` (unknown employee,
+wrong state, unknown department) is final. A half-finished event resumes where it stopped.
+Every step is in the audit trail (`hr_event_received`, `hr_kill_switch`, `hr_event_processed` /
+`hr_event_rejected` / `hr_event_failed`, `hr_event_signature_rejected`). IT Admin and Admin can
+list recent events at `GET /api/hr/events`.
+
+**Try it.**
+
+1. Open <https://localhost:8091> (the page has no sign-in and is bound to 127.0.0.1 only).
+2. **Resign** `alice`: she is suspended everywhere at once (try her open Personal Laptop / Account
+   session: it ends within ~5 s), and a *return* request raised by *HR System (Automated)* appears
+   for `hr`. Take it through `hr` → `director` → `aa` → `itadmin`, then `req` books the appointment
+   and `euss` retrieves the assets.
+3. **Hire** a new username, or `dave`: an *onboard* request appears for `hr`.
+4. **Transfer** `bob` to Engineering: a *shift* request is raised and `bob` is suspended until IT processes it.
+
+**Upgrading to CHANGE 008:** run `python scripts/generate_secrets.py` (adds `HRMS_WEBHOOK_SECRET`),
+then `docker compose up -d --build`. The new table and the system account are created on start.
+Offline checks: `python services/backend/test_hr_events.py`.
+
+**Notes.** Employees who are `inactive` are no longer on the Mandatory Job Rotation clock.
+`effective_date` and `reason` are recorded but the kill switch is immediate: it does not wait
+for a future last working day.
 
 ## Mandatory Job Rotation (MJR) tracker
 
@@ -416,7 +483,7 @@ by the backend and readable only by **IT Admin** (top bar → **Audit trail**).
 | `quota` | **IT's department-quota changes** (old → new), org-wide quota proposals / approvals / rejections, over-quota overrides with the justification |
 | `config` | departments created, department → service mapping changes |
 | `access` | **access checks** by the services (every denial; grants at sign-in), role-based permission denials in the API, every entitlement granted / revoked |
-| `workflow` | every request step: submitted, approved, rejected, processed, appointment booked, provisioned, retrieved |
+| `workflow` | every request step: submitted, approved, rejected, processed, appointment booked, provisioned, retrieved, **refused self-approvals** (`request_self_approval_blocked`) |
 | `asset` | asset provisioned / retrieved (chain of custody) |
 | `audit` | downloads of the trail and integrity checks |
 
@@ -644,6 +711,8 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | GET | `/api/audit/verify` | **it_admin** — re-check the whole hash chain |
 | GET | `/api/audit/export?format=csv\|jsonl` | **it_admin** — download (filtered) |
 | POST | `/api/employees/{id}/password/reset`, `/api/employees/{id}/sessions/revoke` | admin (via Keycloak) |
+| POST | `/api/hr/events` | **HR system only** — signed webhook (`X-HR-Timestamp`, `X-HR-Signature`); `hire`, `transfer`, `resign` |
+| GET | `/api/hr/events` | it_admin, admin — recent HR events and what each did |
 | POST | `/api/service/access` | **services only** (client credentials), about themselves |
 | GET | `/api/services`, `/api/departments`, `/api/employees` | any auth |
 | POST/PUT/DELETE | `/api/employees[/id]` | admin |

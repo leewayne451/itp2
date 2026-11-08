@@ -29,6 +29,23 @@ VALID_ROLES = {"employee", "requestor", "hr", "director", "aa", "it_admin", "eus
 KIND_OF = {"laptop": "Laptop", "account": "Account"}
 STAFF_ROLES = ("hr", "director", "aa", "it_admin", "euss", "admin")
 
+# The HR-system webhook (CHANGE 008) raises requests as this account. It exists only so a
+# request has a requestor to show; it has no Keycloak login, no sign-in and no console access.
+SYSTEM_USERNAME = "hr-system"
+SYSTEM_ROLE = "system"
+
+
+def system_actor():
+    """The automation account (id, username, full_name, role), or None if not seeded."""
+    return db.query("SELECT id, username, full_name, role FROM employees WHERE username=%s AND role=%s",
+                    (SYSTEM_USERNAME, SYSTEM_ROLE), fetch="one")
+
+
+def is_system_actor_id(emp_id):
+    """True when `emp_id` is the automation account (a request it raised belongs to the
+    whole Requestor role, since nobody can sign in as it to book the appointment)."""
+    return db.query("SELECT 1 FROM employees WHERE id=%s AND role=%s", (emp_id, SYSTEM_ROLE), fetch="one") is not None
+
 
 # --------------------------------------------------------------------------- #
 # Requests + events
@@ -117,8 +134,12 @@ def notify(rid, action, note=None, actor_id=None):
     # 1) The request has just arrived in someone's queue.
     role = STATE_ROLE.get(r["status"])
     if role:
-        recipients = ([_email_of(r["requestor_id"])] if role == "requestor"
-                      else _emails_for_role(role))
+        if role == "requestor":
+            # A request raised by the HR-system account has no mailbox: every Requestor is told.
+            recipients = (_emails_for_role("requestor") if is_system_actor_id(r["requestor_id"])
+                          else [_email_of(r["requestor_id"])])
+        else:
+            recipients = _emails_for_role(role)
         for person in recipients:
             send(person, f"[ServiceJourney] ACTION REQUIRED — request #{rid} is waiting on you",
                  f"{header}\n\n{status_line}\n\nA request now needs your action. "
@@ -437,6 +458,11 @@ def load_stage(rid, expected_status):
     needed = STATE_ROLE.get(expected_status)
     if g.user["role"] != needed:
         return None, (jsonify(error=f"This action requires role '{needed}'"), 403)
+    if req["target_employee_id"] == g.user["id"]:
+        audit.record("workflow", "request_self_approval_blocked", outcome="denied",
+                     target_type="request", target_id=rid,
+                     target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
+        return None, (jsonify(error="You can't act on a request that is about you (separation of duties)."), 403)
     return req, None
 
 

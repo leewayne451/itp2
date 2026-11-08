@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HRMS — HR system of record (demo)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1d2330; --mute:#667085; --line:#e3e6ec; --brand:#2f5fd0; --ok:#1a7f4b; --warn:#a35a00; --err:#b42318; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:#1d2330; color:#fff; padding:14px 24px; display:flex; align-items:baseline; gap:14px; }
+  header h1 { margin:0; font-size:18px; } header span { color:#aab3c5; font-size:13px; }
+  main { max-width:1100px; margin:20px auto; padding:0 16px; display:grid; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px; }
+  .card h2 { margin:0 0 4px; font-size:15px; } .card p.hint { margin:0 0 12px; color:var(--mute); font-size:13px; }
+  .forms { display:grid; grid-template-columns:repeat(auto-fit,minmax(310px,1fr)); gap:16px; }
+  form.f { display:grid; gap:8px; }
+  label { font-size:12px; color:var(--mute); display:grid; gap:3px; }
+  input,select { font:inherit; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; width:100%; }
+  button { font:inherit; padding:8px 12px; border:0; border-radius:6px; background:var(--brand); color:#fff; cursor:pointer; }
+  button.danger { background:var(--err); } button.small { padding:4px 9px; font-size:12px; background:#fff; color:var(--brand); border:1px solid var(--brand); }
+  table { width:100%; border-collapse:collapse; } th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--mute); font-weight:600; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; background:#eef1f6; }
+  .pill.delivered,.pill.active { background:#e3f4ea; color:var(--ok); } .pill.pending { background:#fff2dc; color:var(--warn); }
+  .pill.refused,.pill.failed,.pill.resigned { background:#fde8e6; color:var(--err); }
+  .flash { padding:10px 14px; border-radius:6px; border:1px solid; } .flash.ok { background:#e3f4ea; border-color:#b9e2c9; }
+  .flash.error { background:#fde8e6; border-color:#f4c1bb; } .flash.warn { background:#fff2dc; border-color:#f3d9a6; }
+  code { background:#eef1f6; padding:1px 5px; border-radius:4px; font-size:12px; } .mute { color:var(--mute); }
+  .inline { display:flex; gap:6px; align-items:center; } .inline select { width:auto; }
+</style>
+</head>
+<body>
+<header><h1>HRMS</h1><span>HR system of record (demo stand-in for ServiceNow HRSD) &middot; events go to <code>{{ backend }}/api/hr/events</code></span></header>
+<main>
+  {% with msgs = get_flashed_messages(with_categories=true) %}{% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}{% endwith %}
+
+  <div class="forms">
+    <section class="card"><h2>Record a hire</h2><p class="hint">Creates the employee in ServiceJourney (if new) and raises the onboarding request.</p>
+      <form class="f" method="post" action="{{ url_for('hire') }}">
+        <label>Username<input name="username" required pattern="[a-z0-9][a-z0-9._-]{1,31}" placeholder="e.g. nina"></label>
+        <label>Full name<input name="full_name" required placeholder="Nina New"></label>
+        <label>E-mail (optional)<input name="email" type="email"></label>
+        <label>Department<select name="department" required>{% for d in departments %}<option>{{ d }}</option>{% endfor %}</select></label>
+        <button>Record hire</button>
+      </form>
+      <p class="hint" style="margin-top:10px">Tip: <code>dave</code>, <code>kate</code> and <code>liam</code> already exist in ServiceJourney without a department — hiring them only raises the onboarding.</p></section>
+
+    <section class="card"><h2>Record a transfer</h2><p class="hint">Raises a department shift request.</p>
+      <form class="f" method="post" action="{{ url_for('transfer') }}">
+        <label>Employee<select name="username" required>{% for p in people if p.status == 'active' %}<option value="{{ p.username }}">{{ p.full_name }} — {{ p.department }}</option>{% endfor %}</select></label>
+        <label>New department<select name="department" required>{% for d in departments %}<option>{{ d }}</option>{% endfor %}</select></label>
+        <label>Reason (optional)<input name="reason"></label>
+        <button>Record transfer</button>
+      </form></section>
+
+    <section class="card"><h2>Record a resignation</h2><p class="hint">Immediate kill switch (suspended everywhere), then the return request is raised.</p>
+      <form class="f" method="post" action="{{ url_for('resign') }}" onsubmit="return confirm('Record this resignation? Access is suspended immediately.')">
+        <label>Employee<select name="username" required>{% for p in people if p.status == 'active' %}<option value="{{ p.username }}">{{ p.full_name }} — {{ p.department }}</option>{% endfor %}</select></label>
+        <label>Reason (optional)<input name="reason" placeholder="Resignation"></label>
+        <button class="danger">Record resignation</button>
+      </form></section>
+  </div>
+
+  <section class="card"><h2>Events sent to ServiceJourney</h2><p class="hint">Delivery is retried automatically with the same event id; ServiceJourney handles each id once.</p>
+    <table><tr><th>Recorded (SGT)</th><th>Event</th><th>Employee</th><th>Delivery</th><th>ServiceJourney's answer</th><th></th></tr>
+    {% for e in events %}<tr>
+      <td>{{ e.recorded | sgt }}</td><td><b>{{ e.type }}</b>{% if e.department %}<br><span class="mute">{{ e.department }}</span>{% endif %}</td>
+      <td>{{ e.full_name }}<br><span class="mute">{{ e.username }}</span></td>
+      <td><span class="pill {{ e.delivery }}">{{ e.delivery }}</span><br><span class="mute">{{ e.attempts }} attempt{{ '' if e.attempts == 1 else 's' }}</span></td>
+      <td>{% set r = e.response or {} %}
+        {% if r.error %}{{ r.error }}{% else %}
+          {% if r.kill_switch %}kill switch: <b>{{ r.kill_switch.status }}</b><br>{% endif %}
+          {% if r.employee_created %}employee created<br>{% endif %}
+          {% if r.request_id %}{{ r.request_type }} request <b>#{{ r.request_id }}</b>{% elif r.return_note %}{{ r.return_note }}{% endif %}
+          {% if r.closed_requests %}<br>closed open request(s): {{ r.closed_requests | join(', ') }}{% endif %}
+        {% endif %}</td>
+      <td>{% if e.delivery in ('pending','failed') %}<form method="post" action="{{ url_for('resend', event_id=e.event_id) }}"><button class="small">Re-send</button></form>{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="6" class="mute">No events yet.</td></tr>{% endfor %}</table></section>
+
+  <section class="card"><h2>People in HR</h2>
+    <table><tr><th>Username</th><th>Name</th><th>Department</th><th>Status</th></tr>
+    {% for p in people %}<tr><td><code>{{ p.username }}</code></td><td>{{ p.full_name }}</td><td>{{ p.department }}</td><td><span class="pill {{ p.status }}">{{ p.status }}</span></td></tr>{% endfor %}</table></section>
+</main>
+</body></html>

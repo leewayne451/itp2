@@ -103,7 +103,7 @@ def request_logout(emp_id):
 def sync_employee(emp_id, end_sessions=False):
     with _lock:
         emp = db.query("SELECT * FROM employees WHERE id=%s", (emp_id,), fetch="one")
-        if not emp:
+        if not emp or emp["role"] == "system":   # the HR-system account never signs in (CHANGE 008)
             return
         kc_id = emp["keycloak_id"]
         if kc_id and not keycloak.get_user(kc_id):
@@ -161,7 +161,8 @@ def _erase_local_credentials(emp_id):
 
 
 def sync_pending():
-    rows = db.query("SELECT id FROM employees WHERE kc_sync_pending OR keycloak_id IS NULL ORDER BY id")
+    rows = db.query("SELECT id FROM employees WHERE (kc_sync_pending OR keycloak_id IS NULL) "
+                    "AND role <> 'system' ORDER BY id")
     done = 0
     for r in rows:
         try:

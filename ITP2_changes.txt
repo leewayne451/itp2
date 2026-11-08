@@ -5,6 +5,98 @@ and how it was verified. Newest entry at the top. Times are Singapore (SGT, UTC+
 
 
 -------------------------------------------------------------------------------
+[2026-11-08 SGT]  CHANGE 009 — Separation of duties: no self-approval
+-------------------------------------------------------------------------------
+Summary
+  A user can no longer approve, reject or process a request whose target employee is
+  themselves. The action is refused with a 403 and a message, the request is left
+  untouched, and the refusal is written to the audit trail.
+
+What changed
+  services/backend/app/api/requests.py  approve() and reject(): after the stage and role
+                                      checks, refuse if target_employee_id is the caller
+                                      (403 "You can't approve / reject a request that is
+                                      about you (separation of duties).")
+  services/backend/app/core.py        load_stage(): the same check, so IT "Process", the
+                                      appointment step and both EUSS steps are covered too
+  Audit                               new workflow event request_self_approval_blocked
+                                      (outcome: denied, actor id in the details)
+  README.md                           workflow section + audit table
+
+Note
+  Requests normally target role=employee, while approvers hold hr / director / aa /
+  it_admin, so the target and the approver are never the same person in the seeded
+  data. The check bites when a target's role changes after the request was raised. The
+  demo therefore raises a request for an employee and then has the Administrator change
+  that employee's role to HR.
+
+Verification (manual, running stack)
+  - `req` raised a grant request for erin; admin set erin's role to HR; erin signed in and
+    saw the request in the HR queue.
+  - Approve as erin -> 403 with the separation-of-duties message; request still pending_hr
+    with no approved / rejected entry in its timeline.
+  - Reject as erin -> same 403. (First attempt returned 500, UnboundLocalError: the check had
+    been pasted twice and one copy ran before `status` was set. Fixed by keeping a single
+    copy after the stage and role checks.)
+  - `hr` (Harper) approved the same request normally, so legitimate approvers are not blocked.
+  - Audit trail shows request_self_approval_blocked for the refused attempts.
+  - Not tested: the blocking path in load_stage() (process / appointment / EUSS); only its
+    normal path was exercised.
+
+-------------------------------------------------------------------------------
+[2026-11-08 SGT]  CHANGE 008 — HR system (HRMS): event-driven joiner / mover / leaver
+-------------------------------------------------------------------------------
+Summary
+  New `hrms` container that stands in for the HR system of record (or ServiceNow HRSD).
+  When HR records a hire, a transfer or a resignation there, it sends a signed webhook to
+  the backend, which raises the matching onboard / shift / return request by itself. A
+  resignation applies a kill switch first: the employee is suspended everywhere before the
+  return workflow even starts.
+
+What changed
+  services/hrms/                      NEW container (port 8091, published on 127.0.0.1 only):
+                                      UI to record hire / transfer / resign, keeps its own
+                                      people + event record, sends the signed webhook, retries
+                                      failed deliveries with the same event id, "Re-send" button
+  services/backend/                   NEW POST /api/hr/events (signed webhook) and
+                                      GET /api/hr/events (IT Admin, Admin); hr_events table so
+                                      each event id is processed once; "HR System (Automated)"
+                                      system actor (role system, cannot sign in); kill switch
+                                      on resign; test_hr_events.py (offline checks)
+  Audit                               hr_event_received, hr_kill_switch, hr_event_processed,
+                                      hr_event_rejected, hr_event_failed,
+                                      hr_event_signature_rejected
+  docker-compose.yml                  hrms service; HRMS_WEBHOOK_SECRET passed to backend + hrms
+  scripts/generate_secrets.py         new secret HRMS_WEBHOOK_SECRET
+  README.md                           containers table, project structure, HR system section,
+                                      API table
+
+Webhook
+  POST /api/hr/events
+  X-HR-Timestamp: <unix seconds>
+  X-HR-Signature: sha256=HMAC_SHA256(HRMS_WEBHOOK_SECRET, "<timestamp>." + body)
+  A bad signature or a timestamp more than 5 minutes off is refused (401).
+
+To apply
+  python scripts/generate_secrets.py
+  docker compose up -d --build
+
+Verification (manual, running stack)
+  - Resign alice in the HRMS: she could no longer sign in to service1 or service2, the console
+    showed her as inactive, and a return request raised by the HR system appeared in HR's
+    queue with a note that it came from the HRMS.
+  - Bad calls: no signature and a wrong signature -> 401 "Invalid signature"; unknown
+    employee, unknown event type, a tampered body and a stale timestamp were all refused
+    and the target employee was left unchanged.
+  - Delivery: with the backend stopped, a resignation showed as pending and was delivered
+    automatically after the backend came back; replaying the same event id did not raise a
+    second request.
+  - Hire of a brand-new username created the employee and raised an onboard request.
+  - Audit trail shows the HR events and the kill switch.
+  - Not tested: taking an HRMS-raised return request through the whole approval chain to
+    EUSS, and the 5-second session-termination time with a stopwatch.
+
+-------------------------------------------------------------------------------
 [2026-11-07 SGT]  CHANGE 007 — Service journey analytics and bottleneck prediction
 -------------------------------------------------------------------------------
 Summary

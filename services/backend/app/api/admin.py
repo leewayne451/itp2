@@ -22,6 +22,10 @@ def _kc_error(e):
     return jsonify(error=f"Keycloak: {e.message}"), (400 if e.status == 400 else 503)
 
 
+def _is_system(emp_id):
+    return db.query("SELECT 1 FROM employees WHERE id=%s AND role='system'", (emp_id,), fetch="one") is not None
+
+
 def _linked(emp_id):
     """(employee, keycloak_id) — syncing first if the account is not in Keycloak yet."""
     emp = db.query("SELECT * FROM employees WHERE id=%s", (emp_id,), fetch="one")
@@ -81,6 +85,8 @@ def update_employee(emp_id):
     body = request.get_json(silent=True) or {}
     if not db.query("SELECT 1 FROM employees WHERE id=%s", (emp_id,), fetch="one"):
         return jsonify(error="Employee not found"), 404
+    if _is_system(emp_id):
+        return jsonify(error="The HR-system account is managed by the platform"), 403
     # Passwords are deliberately NOT editable here: use the reset endpoint.
     if "password" in body:
         return jsonify(error="Use POST /api/employees/<id>/password/reset to reset a password"), 400
@@ -225,6 +231,8 @@ def delete_employee(emp_id):
                    (emp_id,), fetch="one")
     if not emp:
         return jsonify(error="Employee not found"), 404
+    if emp["role"] == "system":
+        return jsonify(error="The HR-system account is managed by the platform"), 403
     db.query("DELETE FROM employees WHERE id=%s", (emp_id,), fetch=None)
     try:
         sync.delete(emp["keycloak_id"])     # removes the login (and ends its sessions)

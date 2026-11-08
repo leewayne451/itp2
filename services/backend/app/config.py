@@ -48,6 +48,13 @@ for _pair in os.environ.get("API_CLIENTS", "").split(","):
             API_CLIENTS[_cid.strip()] = _sec.strip()
 
 # --------------------------------------------------------------------------- #
+# HR system webhook (CHANGE 008, see api/hr.py): the shared secret the HRMS signs its
+# events with. Optional so an older .env still starts; without it the endpoint answers 503.
+# --------------------------------------------------------------------------- #
+HR_WEBHOOK_SECRET = os.environ.get("HR_WEBHOOK_SECRET", "").strip()
+CONSOLE_URL = os.environ.get("CONSOLE_URL", "https://localhost:8080").rstrip("/")   # in new-hire e-mails
+
+# --------------------------------------------------------------------------- #
 # Audit trail (see audit.py)
 # --------------------------------------------------------------------------- #
 # HMAC key that seals the audit hash chain: without it, nobody with database
