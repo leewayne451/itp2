@@ -5,7 +5,7 @@
 {% if current_user.role == 'it_admin' %}
 <section class="panel">
   <div class="panel-head"><h2>Create access review</h2></div>
-  <p class="muted small">Create a point-in-time review for one department and assign it to an active Director.</p>
+  <p class="muted small">Create a point-in-time certification for one department and assign it to its Director.</p>
   <form method="post" action="{{ url_for('access_reviews.create') }}" class="stack-form inline-grid">
     <label>Campaign name
       <input name="name" required maxlength="160" placeholder="Engineering Q4 access review">
@@ -53,7 +53,7 @@
 {% if collection_tasks %}
 <section class="panel">
   <div class="panel-head"><h2>Assets awaiting collection</h2></div>
-  <p class="muted small">Digital access has already ended. The asset remains assigned until EUSS confirms physical retrieval.</p>
+  <p class="muted small">Legacy review collection tasks remain visible here. New review removals use the standard return workflow.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Campaign</th><th>Employee</th><th>Department</th><th>Asset</th><th>Related resource</th><th>Created</th><th></th></tr></thead>
@@ -99,12 +99,12 @@
       <button class="btn-sm" type="submit">Run reconciliation</button>
     </form>
     <form method="post" action="{{ url_for('access_reviews.close', campaign_id=campaign.id) }}">
-      <button class="btn-sm primary" type="submit" {% if campaign.summary.unresolved %}disabled title="Resolve all investigations and asset collections first"{% endif %}>Complete review</button>
+      <button class="btn-sm primary" type="submit" {% if campaign.summary.unresolved %}disabled title="Resolve all investigations, returns and legacy asset collections first"{% endif %}>Complete review</button>
     </form>
     <a class="btn-sm" href="{{ url_for('access_reviews.export', campaign_id=campaign.id) }}">Download CSV</a>
   </div>
   {% if campaign.summary.unresolved %}
-  <p class="small muted">Complete review becomes available after every decision is recorded and all investigations and asset collections are resolved.</p>
+  <p class="small muted">Complete review becomes available after every decision is recorded and all investigations, governed returns and legacy asset collections are resolved.</p>
   {% endif %}
   {% elif current_user.role == 'it_admin' %}
   <a class="btn-sm" href="{{ url_for('access_reviews.export', campaign_id=campaign.id) }}">Download CSV</a>
@@ -113,7 +113,7 @@
 
 <section class="panel">
   <div class="panel-head"><h2>Review items</h2></div>
-  <p class="muted small">Expected access comes from the department mapping. A completed request is supporting evidence; access without one is flagged as orphaned.</p>
+  <p class="muted small">Expected access comes from the department mapping. Certifying keeps current access; initiating a return follows the standard approval and EUSS retrieval workflow.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Officer</th><th>Resource</th><th>Expected / actual</th><th>Evidence</th><th>Finding</th><th>Decision</th></tr></thead>
@@ -137,6 +137,7 @@
               <strong>{{ i.decision|capitalize }}</strong>
               <div class="small muted">{{ i.decision_reason or 'No reason' }}</div>
               <div class="small"><span class="pill {{ 'ok' if i.remediation_status in ('accepted','remediated') else 'wait' }}">{{ i.remediation_status|replace('_',' ') }}</span></div>
+              {% if i.return_request_id %}<div class="small"><a href="{{ url_for('requests.detail', rid=i.return_request_id) }}">Return request #{{ i.return_request_id }}</a>{% if i.return_status %} · {{ i.return_status|replace('_',' ') }}{% endif %}</div>{% endif %}
               {% if current_user.role == 'it_admin' and i.decision == 'investigate' and i.remediation_status == 'investigating' %}
               <form method="post" action="{{ url_for('access_reviews.resolve', item_id=i.id) }}" class="stack-form compact-review">
                 <input type="hidden" name="campaign_id" value="{{ campaign.id }}">
@@ -149,8 +150,8 @@
                 <input type="hidden" name="campaign_id" value="{{ campaign.id }}">
                 <input name="reason" maxlength="500" placeholder="Reason (required for flagged Keep, Revoke and Investigate)">
                 <div class="row-actions">
-                  {% if i.actual_access %}<button name="decision" value="keep" class="btn-sm" type="submit">Keep</button>{% endif %}
-                  {% if i.actual_access %}<button name="decision" value="revoke" class="btn-sm danger" type="submit">Revoke now</button>{% endif %}
+                  {% if i.actual_access %}<button name="decision" value="keep" class="btn-sm" type="submit">Certify access</button>{% endif %}
+                  {% if i.actual_access %}<button name="decision" value="revoke" class="btn-sm danger" type="submit">Initiate return</button>{% endif %}
                   <button name="decision" value="investigate" class="btn-sm" type="submit">Investigate</button>
                 </div>
               </form>

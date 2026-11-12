@@ -73,7 +73,8 @@ def decide(item_id):
     resp = call("POST", f"/api/access-review-items/{item_id}/decision", json=payload)
     if resp.ok:
         result = resp.json()
-        suffix = f" {len(result['asset_task_ids'])} asset collection task(s) created." if result["asset_task_ids"] else ""
+        suffix = (f" Return request #{result['return_request_id']} was created."
+                  if result.get("return_request_id") else "")
         flash(f"Decision recorded.{suffix}", "ok")
     else:
         flash(error_of(resp), "error")

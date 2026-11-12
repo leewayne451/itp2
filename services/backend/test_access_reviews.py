@@ -15,9 +15,11 @@ package.__path__ = []
 sys.modules["app"] = package
 sys.modules["app.audit"] = types.ModuleType("app.audit")
 sys.modules["app.db"] = types.ModuleType("app.db")
+workflows = types.ModuleType("app.workflows")
+workflows.raise_return = lambda *args, **kwargs: (None, None)
+sys.modules["app.workflows"] = workflows
 core = types.ModuleType("app.core")
-for name in ("add_asset_event", "department_effective_services", "employee_asset_kinds_needed",
-             "held_assets", "revoke_with_dependents", "service_names"):
+for name in ("add_asset_event", "department_effective_services", "held_assets", "access_review_system_actor"):
     setattr(core, name, lambda *args, **kwargs: None)
 sys.modules["app.core"] = core
 
@@ -54,6 +56,9 @@ check("inactive access is critical and wins risk ordering",
 check("asset and missing access retain both findings",
       reviews.classify("active", False, True, True, None),
       (["asset_without_access", "missing_expected"], "asset_without_access", "high"))
+check("return workflow stages map to review remediation",
+      reviews.RETURN_REMEDIATION["pending_euss"], "return_pending_euss")
+check("completed return remediation is terminal", "remediated" not in reviews.RETURN_REMEDIATION.values(), True)
 
 print("\nFAILED: " + ", ".join(failed) if failed else "\nAll checks passed.")
 sys.exit(1 if failed else 0)

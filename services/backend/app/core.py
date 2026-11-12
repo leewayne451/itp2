@@ -32,13 +32,19 @@ STAFF_ROLES = ("hr", "director", "aa", "it_admin", "euss", "admin")
 # The HR-system webhook (CHANGE 008) raises requests as this account. It exists only so a
 # request has a requestor to show; it has no Keycloak login, no sign-in and no console access.
 SYSTEM_USERNAME = "hr-system"
+ACCESS_REVIEW_SYSTEM_USERNAME = "access-review-system"
 SYSTEM_ROLE = "system"
 
 
-def system_actor():
-    """The automation account (id, username, full_name, role), or None if not seeded."""
+def system_actor(username=SYSTEM_USERNAME):
+    """A non-login automation account, or None if it has not been seeded."""
     return db.query("SELECT id, username, full_name, role FROM employees WHERE username=%s AND role=%s",
-                    (SYSTEM_USERNAME, SYSTEM_ROLE), fetch="one")
+                    (username, SYSTEM_ROLE), fetch="one")
+
+
+def access_review_system_actor():
+    """The automation identity that owns returns initiated by an access review."""
+    return system_actor(ACCESS_REVIEW_SYSTEM_USERNAME)
 
 
 def is_system_actor_id(emp_id):
