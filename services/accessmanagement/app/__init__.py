@@ -6,7 +6,8 @@ from flask import Flask, session, redirect, url_for, request, abort, flash
 
 from . import config, labels
 from .backend_client import AuthExpired
-from .views import auth, dashboard, requests as req_views, admin, quotas, assets, security, audit, rotations, journey
+from .views import (auth, dashboard, requests as req_views, admin, quotas, assets,
+                    security, audit, rotations, journey, access_reviews)
 
 
 def create_app():
@@ -53,7 +54,8 @@ def create_app():
         resp.headers.setdefault("Cache-Control", "no-store")            # pages show codes / temp passwords
         return resp
 
-    for module in (auth, dashboard, req_views, admin, quotas, assets, security, audit, rotations, journey):
+    for module in (auth, dashboard, req_views, admin, quotas, assets, security,
+                   audit, rotations, journey, access_reviews):
         app.register_blueprint(module.bp)
 
     labels.register(app)

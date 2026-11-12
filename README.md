@@ -670,6 +670,33 @@ temporary password (`username`) with your own. To switch account, **Sign out** f
    the *Rotation tracker* shows her clock restarted. (If you already ran step 7 on alice, use
    frank for the rotation instead.)
 
+## Access review and reconciliation (first iteration)
+
+The **Access reviews** page gives IT Admin, the assigned Director and EUSS one
+controlled review workflow:
+
+1. Sign in as **`itadmin`**, open **Access reviews**, and create a campaign for one
+   department. Choose `director` as reviewer and a future due date. The campaign
+   snapshots the department standard, live entitlements, assigned assets and the
+   most recent completed request that supports each entitlement. Only one open
+   campaign is allowed per department; completed campaigns remain as history and
+   do not prevent a later review cycle.
+2. Sign out and sign in as **`director`**. Open the assigned campaign and record
+   **Keep**, **Revoke now**, or **Investigate** for each row. Self-review is refused.
+   Reasons are mandatory for exceptions and investigations.
+3. A revoke removes digital access immediately. If the resource has a physical
+   asset, it creates an EUSS collection task but deliberately leaves custody assigned
+   until collection is confirmed.
+4. Sign in as **`euss`**, open **Access reviews**, and confirm each physical retrieval.
+5. Sign in as **`itadmin`**. Resolve any investigations (a grant still has to use the
+   normal request workflow), run reconciliation, download the CSV evidence, then
+   complete the campaign. Completion is blocked while a decision or remediation is
+   outstanding. All important actions are written to **Audit trail**.
+
+Reconciliation refreshes changed evidence and returns unexpected drift to the
+Director. Changes caused by an approved revoke or its asset collection retain the
+original review decision.
+
 ## Live session termination
 
 The service dockers re-validate against the backend on every `/success` load and
@@ -730,6 +757,12 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | POST | `/api/rotations/{employee_id}/decision` | director — `{"decision":"keep","reason":…}` or `{"decision":"rotate","department_id":…}` |
 | GET | `/api/rotations/planned` | requestor — rotate decisions waiting for a shift request |
 | POST | `/api/rotations/check` | hr — run the due check now (e-mails Directors) |
+| GET/POST | `/api/access-reviews` | it_admin creates; assigned director, IT and EUSS can view according to role |
+| POST | `/api/access-review-items/{id}/decision` | assigned director — keep, revoke or investigate |
+| POST | `/api/access-review-items/{id}/resolve` | it_admin — close an investigation with evidence |
+| POST | `/api/access-review-asset-tasks/{id}/collect` | euss — confirm physical retrieval |
+| POST | `/api/access-reviews/{id}/reconcile` or `/close` | it_admin |
+| GET | `/api/access-reviews/{id}/export` | it_admin — CSV evidence export |
 | GET | `/api/journey?type=all\|grant\|return\|shift\|onboard` | hr, director, aa, it_admin, euss, admin — latest Analytics results |
 | POST | `/api/journey/refresh` | same roles — ask the analytics container to recompute now |
 | GET | `/api/quotas` | aa, it_admin, admin |

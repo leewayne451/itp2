@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Access reviews{% endblock %}
+{% block content %}
+
+{% if current_user.role == 'it_admin' %}
+<section class="panel">
+  <div class="panel-head"><h2>Create access review</h2></div>
+  <p class="muted small">Create a point-in-time review for one department and assign it to an active Director.</p>
+  <form method="post" action="{{ url_for('access_reviews.create') }}" class="stack-form inline-grid">
+    <label>Campaign name
+      <input name="name" required maxlength="160" placeholder="Engineering Q4 access review">
+    </label>
+    <label>Department
+      <select name="department_id" required>
+        <option value="">— select —</option>
+        {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Assigned Director
+      <select name="reviewer_id" required>
+        <option value="">— select —</option>
+        {% for d in directors %}<option value="{{ d.id }}">{{ d.full_name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Due date
+      <input type="datetime-local" name="due_at" required>
+    </label>
+    <button type="submit" class="primary">Create and snapshot</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Access review campaigns</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Campaign</th><th>Department</th><th>Reviewer</th><th>Due</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% if not campaigns %}<tr><td colspan="7" class="muted">No access reviews are available.</td></tr>{% endif %}
+        {% for c in campaigns %}
+        <tr>
+          <td>{{ c.id }}</td><td>{{ c.name }}</td><td>{{ c.department_name }}</td><td>{{ c.reviewer_name }}</td>
+          <td class="nowrap">{{ c.due_at | dt }}</td>
+          <td><span class="pill {{ 'ok' if c.status=='completed' else 'bad' if c.status=='overdue' else 'wait' }}">{{ c.status|replace('_',' ') }}</span></td>
+          <td><a class="btn-sm" href="{{ url_for('access_reviews.index', campaign_id=c.id) }}">Open</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if collection_tasks %}
+<section class="panel">
+  <div class="panel-head"><h2>Assets awaiting collection</h2></div>
+  <p class="muted small">Digital access has already ended. The asset remains assigned until EUSS confirms physical retrieval.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Campaign</th><th>Employee</th><th>Department</th><th>Asset</th><th>Related resource</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for t in collection_tasks %}
+        <tr>
+          <td>{% if current_user.role == 'it_admin' %}<a href="{{ url_for('access_reviews.index', campaign_id=t.campaign_id) }}">{{ t.campaign_name }}</a>{% else %}{{ t.campaign_name }}{% endif %}</td>
+          <td>{{ t.employee_name }}<div class="small muted">{{ t.employee_username }}</div></td>
+          <td>{{ t.department_name or '—' }}</td><td><code>{{ t.asset_tag }}</code> · {{ t.kind }}</td>
+          <td>{{ t.service_name }}</td><td class="nowrap">{{ t.created_at | dt }}</td>
+          <td>
+            {% if current_user.role == 'euss' %}
+            <form method="post" action="{{ url_for('access_reviews.collect', task_id=t.id) }}">
+              <input type="hidden" name="campaign_id" value="{{ t.campaign_id }}">
+              <button type="submit" class="btn-sm primary">Confirm retrieval</button>
+            </form>
+            {% else %}<span class="small muted">Waiting for EUSS</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if campaign %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ campaign.name }}</h2>
+    <span class="pill {{ 'ok' if campaign.status=='completed' else 'wait' }}">{{ campaign.status|replace('_',' ') }}</span>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-row"><span class="detail-k">Department</span><span>{{ campaign.department_name }}</span></div>
+    <div class="detail-row"><span class="detail-k">Assigned reviewer</span><span>{{ campaign.reviewer_name }}</span></div>
+    <div class="detail-row"><span class="detail-k">Snapshot</span><span>{{ campaign.snapshot_at | dt }}</span></div>
+    <div class="detail-row"><span class="detail-k">Due</span><span>{{ campaign.due_at | dt }}</span></div>
+    <div class="detail-row"><span class="detail-k">Progress</span><span>{{ campaign.summary.total - campaign.summary.pending }} / {{ campaign.summary.total }} decided · {{ campaign.summary.investigating }} open investigation(s) · {{ campaign.summary.pending_collection }} asset(s) awaiting collection</span></div>
+  </div>
+  {% if current_user.role == 'it_admin' and campaign.status != 'completed' %}
+  <div class="row-actions">
+    <form method="post" action="{{ url_for('access_reviews.reconcile', campaign_id=campaign.id) }}">
+      <button class="btn-sm" type="submit">Run reconciliation</button>
+    </form>
+    <form method="post" action="{{ url_for('access_reviews.close', campaign_id=campaign.id) }}">
+      <button class="btn-sm primary" type="submit" {% if campaign.summary.unresolved %}disabled title="Resolve all investigations and asset collections first"{% endif %}>Complete review</button>
+    </form>
+    <a class="btn-sm" href="{{ url_for('access_reviews.export', campaign_id=campaign.id) }}">Download CSV</a>
+  </div>
+  {% if campaign.summary.unresolved %}
+  <p class="small muted">Complete review becomes available after every decision is recorded and all investigations and asset collections are resolved.</p>
+  {% endif %}
+  {% elif current_user.role == 'it_admin' %}
+  <a class="btn-sm" href="{{ url_for('access_reviews.export', campaign_id=campaign.id) }}">Download CSV</a>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Review items</h2></div>
+  <p class="muted small">Expected access comes from the department mapping. A completed request is supporting evidence; access without one is flagged as orphaned.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Officer</th><th>Resource</th><th>Expected / actual</th><th>Evidence</th><th>Finding</th><th>Decision</th></tr></thead>
+      <tbody>
+        {% if not campaign['items'] %}<tr><td colspan="6" class="muted">No access or asset records were found for this department.</td></tr>{% endif %}
+        {% for i in campaign['items'] %}
+        <tr>
+          <td>{{ i.employee_name }}<div class="small muted">{{ i.employee_username }} · {{ i.employee_status }}</div></td>
+          <td>{{ i.service_name }}{% if i.asset_tag %}<div class="small"><code>{{ i.asset_tag }}</code></div>{% endif %}</td>
+          <td>
+            <span class="pill {{ 'ok' if i.expected_access else 'bad' }}">expected {{ 'yes' if i.expected_access else 'no' }}</span>
+            <span class="pill {{ 'ok' if i.actual_access else 'bad' }}">actual {{ 'yes' if i.actual_access else 'no' }}</span>
+          </td>
+          <td>{% if i.source_request_id %}<a href="{{ url_for('requests.detail', rid=i.source_request_id) }}">Request #{{ i.source_request_id }}</a>{% else %}<span class="muted">No completed request</span>{% endif %}</td>
+          <td>
+            <span class="pill {{ 'bad' if i.risk_level in ('critical','high') else 'wait' if i.risk_level=='medium' else 'ok' }}">{{ i.risk_level }}</span>
+            <div class="small">{{ i.finding_labels|join('; ') }}</div>
+          </td>
+          <td class="review-decision">
+            {% if i.decision %}
+              <strong>{{ i.decision|capitalize }}</strong>
+              <div class="small muted">{{ i.decision_reason or 'No reason' }}</div>
+              <div class="small"><span class="pill {{ 'ok' if i.remediation_status in ('accepted','remediated') else 'wait' }}">{{ i.remediation_status|replace('_',' ') }}</span></div>
+              {% if current_user.role == 'it_admin' and i.decision == 'investigate' and i.remediation_status == 'investigating' %}
+              <form method="post" action="{{ url_for('access_reviews.resolve', item_id=i.id) }}" class="stack-form compact-review">
+                <input type="hidden" name="campaign_id" value="{{ campaign.id }}">
+                <input name="note" required maxlength="500" placeholder="Investigation outcome / linked request">
+                <button class="btn-sm primary" type="submit">Resolve investigation</button>
+              </form>
+              {% endif %}
+            {% elif current_user.role == 'director' and campaign.status != 'completed' %}
+              <form method="post" action="{{ url_for('access_reviews.decide', item_id=i.id) }}" class="stack-form compact-review">
+                <input type="hidden" name="campaign_id" value="{{ campaign.id }}">
+                <input name="reason" maxlength="500" placeholder="Reason (required for flagged Keep, Revoke and Investigate)">
+                <div class="row-actions">
+                  {% if i.actual_access %}<button name="decision" value="keep" class="btn-sm" type="submit">Keep</button>{% endif %}
+                  {% if i.actual_access %}<button name="decision" value="revoke" class="btn-sm danger" type="submit">Revoke now</button>{% endif %}
+                  <button name="decision" value="investigate" class="btn-sm" type="submit">Investigate</button>
+                </div>
+              </form>
+            {% else %}<span class="pill wait">pending Director</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% endblock %}

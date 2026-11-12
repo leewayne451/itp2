@@ -284,6 +284,79 @@ CREATE TABLE IF NOT EXISTS rotation_decisions (
 CREATE INDEX IF NOT EXISTS rotation_decisions_emp ON rotation_decisions (employee_id, decided_at DESC);
 
 -- --------------------------------------------------------------------------- --
+-- Access review and reconciliation  (CHANGE 010)
+-- --------------------------------------------------------------------------- --
+-- One campaign covers one department and is assigned to one Director. Items are
+-- a point-in-time snapshot of expected access, actual access and assigned assets.
+-- A revoke removes digital access immediately; custody remains with the employee
+-- until EUSS completes the collection task.
+CREATE TABLE IF NOT EXISTS access_review_campaigns (
+    id                   SERIAL PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    department_id        INTEGER NOT NULL REFERENCES departments(id),
+    reviewer_id          INTEGER NOT NULL REFERENCES employees(id),
+    created_by           INTEGER NOT NULL REFERENCES employees(id),
+    status               TEXT NOT NULL DEFAULT 'in_review',
+    due_at               TIMESTAMPTZ NOT NULL,
+    snapshot_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_reconciled_at   TIMESTAMPTZ,
+    completed_at         TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT access_review_campaign_status
+      CHECK (status IN ('in_review', 'remediation', 'completed', 'overdue'))
+);
+
+CREATE TABLE IF NOT EXISTS access_review_items (
+    id                   SERIAL PRIMARY KEY,
+    campaign_id          INTEGER NOT NULL REFERENCES access_review_campaigns(id) ON DELETE CASCADE,
+    employee_id          INTEGER NOT NULL REFERENCES employees(id),
+    service_id           INTEGER NOT NULL REFERENCES services(id),
+    actual_access        BOOLEAN NOT NULL,
+    expected_access      BOOLEAN NOT NULL,
+    source_request_id    INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+    asset_id             INTEGER REFERENCES assets(id) ON DELETE SET NULL,
+    finding_code         TEXT NOT NULL,
+    findings             JSONB NOT NULL DEFAULT '[]'::jsonb,
+    risk_level           TEXT NOT NULL,
+    decision             TEXT,
+    decision_reason      TEXT,
+    reviewed_by          INTEGER REFERENCES employees(id),
+    reviewed_at          TIMESTAMPTZ,
+    remediation_status   TEXT NOT NULL DEFAULT 'pending',
+    remediated_at        TIMESTAMPTZ,
+    last_reconciled_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (campaign_id, employee_id, service_id),
+    CONSTRAINT access_review_item_decision
+      CHECK (decision IS NULL OR decision IN ('keep', 'revoke', 'investigate')),
+    CONSTRAINT access_review_item_risk
+      CHECK (risk_level IN ('critical', 'high', 'medium', 'low')),
+    CONSTRAINT access_review_item_remediation
+      CHECK (remediation_status IN ('pending', 'accepted', 'investigating', 'pending_collection', 'remediated'))
+);
+
+CREATE TABLE IF NOT EXISTS access_review_asset_tasks (
+    id                   SERIAL PRIMARY KEY,
+    review_item_id       INTEGER NOT NULL REFERENCES access_review_items(id) ON DELETE CASCADE,
+    asset_id             INTEGER NOT NULL REFERENCES assets(id),
+    employee_id          INTEGER NOT NULL REFERENCES employees(id),
+    status               TEXT NOT NULL DEFAULT 'pending',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_by         INTEGER REFERENCES employees(id),
+    completed_at         TIMESTAMPTZ,
+    UNIQUE (review_item_id, asset_id),
+    CONSTRAINT access_review_asset_task_status CHECK (status IN ('pending', 'retrieved'))
+);
+
+CREATE INDEX IF NOT EXISTS access_review_campaign_reviewer ON access_review_campaigns (reviewer_id, status);
+-- A department may have historical completed campaigns, but never two active
+-- attestations competing for decisions at the same time.
+CREATE UNIQUE INDEX IF NOT EXISTS access_review_one_open_per_department
+    ON access_review_campaigns (department_id)
+    WHERE status IN ('in_review', 'remediation', 'overdue');
+CREATE INDEX IF NOT EXISTS access_review_item_campaign ON access_review_items (campaign_id, remediation_status);
+CREATE INDEX IF NOT EXISTS access_review_asset_task_status ON access_review_asset_tasks (status, employee_id);
+
+-- --------------------------------------------------------------------------- --
 -- HR-system webhook  (CHANGE 008)
 -- --------------------------------------------------------------------------- --
 -- One row per event the HR system (HRMS / ServiceNow HRSD) has sent. event_id is the

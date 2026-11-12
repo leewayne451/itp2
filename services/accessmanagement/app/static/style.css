@@ -155,3 +155,8 @@ code { background: #f1f5f9; padding: .1rem .35rem; border-radius: 4px; }
 /* ---- single sign-on ---- */
 .btn-sso { display: block; text-align: center; padding: .75rem; border-radius: 8px; text-decoration: none; font-size: 1rem; margin-top: .4rem; }
 .link-list { list-style: none; padding: 0; display: grid; gap: .6rem; margin: .6rem 0 1rem; }
+
+/* ---- access review and reconciliation ---- */
+.review-decision { min-width: 18rem; }
+.compact-review { margin-top: .4rem; min-width: 16rem; }
+.compact-review input { width: 100%; min-width: 0; }

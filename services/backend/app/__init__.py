@@ -3,14 +3,16 @@ from flask import Flask
 
 from . import audit, db, passwords, sync
 from .clients import authenticate_client
-from .api import auth, reference, admin, quotas, requests as requests_api, audit as audit_api, rotations, journey, hr
+from .api import (auth, reference, admin, quotas, requests as requests_api,
+                  audit as audit_api, rotations, journey, hr, access_reviews)
 
 
 def create_app():
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # bound request bodies (documents are base64)
     app.before_request(authenticate_client)
-    for module in (auth, reference, admin, quotas, requests_api, audit_api, rotations, journey, hr):
+    for module in (auth, reference, admin, quotas, requests_api, audit_api, rotations,
+                   journey, hr, access_reviews):
         app.register_blueprint(module.bp)
 
     @app.after_request
