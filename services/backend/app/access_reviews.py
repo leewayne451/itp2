@@ -1,18 +1,16 @@
 """Access review and reconciliation domain logic (CHANGE 010).
 
 The first iteration deliberately keeps campaigns small: one department, one
-assigned Director, and the two resource kinds already modelled by the POC.  A
-review is an authorising workflow in its own right, so a Director's revoke
-decision removes digital access immediately.  Assets remain assigned until EUSS
-records collection through a separate task.
+assigned Director, and the two resource kinds already modelled by the POC. A
+Director's removal decision starts the existing governed return workflow; that
+workflow, not the review itself, revokes access and records asset retrieval.
 """
 import json
 from datetime import datetime, timezone
 
-from . import audit, db
-from .core import (add_asset_event, department_effective_services,
-                   employee_asset_kinds_needed, held_assets,
-                   revoke_with_dependents, service_names)
+from . import audit, db, workflows
+from .core import (add_asset_event, department_effective_services, held_assets,
+                   access_review_system_actor)
 
 
 RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -23,6 +21,15 @@ FINDING_LABELS = {
     "outside_standard": "Access is outside the department standard",
     "missing_expected": "Expected department access is missing",
     "aligned": "Access matches the department standard",
+}
+
+RETURN_REMEDIATION = {
+    "pending_hr": "return_pending_hr",
+    "pending_director": "return_pending_director",
+    "pending_aa": "return_pending_aa",
+    "pending_it": "return_pending_it",
+    "pending_appointment": "return_pending_appointment",
+    "pending_euss": "return_pending_euss",
 }
 
 
@@ -163,12 +170,49 @@ def create_campaign(name, department_id, reviewer_id, due_at, created_by):
     return row["id"]
 
 
+def _sync_linked_returns(campaign_id):
+    """Reflect workflow progress in review evidence without changing access itself.
+
+    The return workflow remains the sole authority that revokes access and releases
+    assets. A rejected return reopens the certification item for the Director.
+    """
+    rows = db.query(
+        """SELECT i.id, i.decision, i.decision_reason, i.remediation_status,
+                  i.return_request_id, r.status AS return_status
+             FROM access_review_items i
+             JOIN requests r ON r.id=i.return_request_id
+            WHERE i.campaign_id=%s""", (campaign_id,))
+    for row in rows:
+        status = row["return_status"]
+        if status == "completed":
+            if row["remediation_status"] != "remediated":
+                db.query("""UPDATE access_review_items SET remediation_status='remediated',
+                              remediated_at=now() WHERE id=%s""", (row["id"],), fetch=None)
+        elif status == "rejected":
+            # Preserve the original decision in the request and audit log, but let the
+            # reviewer choose a new certification outcome for the still-live access.
+            if row["decision"] == "revoke":
+                note = (row["decision_reason"] or "") + f"\nLinked return #{row['return_request_id']} was rejected."
+                db.query("""UPDATE access_review_items SET decision=NULL, decision_reason=%s,
+                              reviewed_by=NULL, reviewed_at=NULL, remediation_status='pending',
+                              remediated_at=NULL WHERE id=%s""", (note, row["id"]), fetch=None)
+                audit.record("access", "access_review_return_rejected", outcome="denied",
+                             target_type="access_review_item", target_id=row["id"],
+                             details={"campaign_id": campaign_id, "return_request_id": row["return_request_id"]})
+        else:
+            remediation = RETURN_REMEDIATION.get(status)
+            if remediation and row["remediation_status"] != remediation:
+                db.query("UPDATE access_review_items SET remediation_status=%s WHERE id=%s",
+                         (remediation, row["id"]), fetch=None)
+
+
 def reconcile(campaign_id, reset_changed=True):
     campaign = db.query("SELECT * FROM access_review_campaigns WHERE id=%s", (campaign_id,), fetch="one")
     if not campaign:
         raise ReviewError("Access review not found", 404)
     if campaign["status"] == "completed":
         raise ReviewError("Completed reviews cannot be reconciled", 409)
+    _sync_linked_returns(campaign_id)
     live_rows = _snapshot_rows(campaign["department_id"])
     changed = new = 0
     for live in live_rows:
@@ -213,6 +257,7 @@ def reconcile(campaign_id, reset_changed=True):
         audit.record("access", "access_review_reconciled", target_type="access_review",
                      target_id=campaign_id, target_label=campaign["name"],
                      details={"items_scanned": len(live_rows), "new_items": new, "changed_items": changed})
+    _sync_linked_returns(campaign_id)
     return len(live_rows)
 
 
@@ -245,6 +290,8 @@ def get_campaign(campaign_id, user):
         raise ReviewError("This review is assigned to another Director", 403)
     if user["role"] not in ("director", "it_admin"):
         raise ReviewError("Access review access denied", 403)
+    _sync_linked_returns(campaign_id)
+    row = db.query(_DETAIL_SQL + " WHERE c.id=%s", (campaign_id,), fetch="one")
     return _campaign_dict(row, include_items=True)
 
 
@@ -266,12 +313,13 @@ def _campaign_dict(row, include_items=False):
         items = db.query(
             """SELECT i.*, e.full_name AS employee_name, e.username AS employee_username,
                       e.status AS employee_status, s.name AS service_name, a.asset_tag,
-                      rb.full_name AS reviewed_by_name
+                      rb.full_name AS reviewed_by_name, rr.status AS return_status
                  FROM access_review_items i
                  JOIN employees e ON e.id=i.employee_id
                  JOIN services s ON s.id=i.service_id
                  LEFT JOIN assets a ON a.id=i.asset_id
                  LEFT JOIN employees rb ON rb.id=i.reviewed_by
+                 LEFT JOIN requests rr ON rr.id=i.return_request_id
                 WHERE i.campaign_id=%s
                 ORDER BY CASE i.risk_level WHEN 'critical' THEN 1 WHEN 'high' THEN 2
                          WHEN 'medium' THEN 3 ELSE 4 END, e.full_name, s.name""", (row["id"],))
@@ -284,8 +332,7 @@ def _campaign_dict(row, include_items=False):
             # part of the evidence after IT resolves it, but is no longer a blocker.
             "investigating": sum(i["remediation_status"] == "investigating" for i in items),
             "pending_collection": sum(i["remediation_status"] == "pending_collection" for i in items),
-            "unresolved": sum(i["remediation_status"] in
-                              ("pending", "investigating", "pending_collection") for i in items),
+            "unresolved": sum(i["remediation_status"] not in ("accepted", "remediated") for i in items),
         }
     return out
 
@@ -305,6 +352,8 @@ def _item_dict(row):
         "decision_reason": row["decision_reason"], "reviewed_by_name": row["reviewed_by_name"],
         "reviewed_at": row["reviewed_at"].isoformat() if row["reviewed_at"] else None,
         "remediation_status": row["remediation_status"],
+        "return_request_id": row.get("return_request_id"),
+        "return_status": row.get("return_status"),
     }
 
 
@@ -353,36 +402,39 @@ def decide(item_id, reviewer, decision, reason):
         raise ReviewError("There is no current access to revoke", 409)
 
     remediation = "accepted" if decision == "keep" else "investigating"
-    removed, task_ids = [], []
+    return_request_id = item.get("return_request_id")
     if decision == "revoke":
-        removed = revoke_with_dependents(item["employee_id"], item["service_id"])
-        needed = employee_asset_kinds_needed(item["employee_id"])
-        for asset in held_assets(item["employee_id"]):
-            if asset["kind"] in needed:
-                continue
-            task = db.query(
-                """INSERT INTO access_review_asset_tasks (review_item_id, asset_id, employee_id)
-                   VALUES (%s,%s,%s) ON CONFLICT (review_item_id, asset_id) DO UPDATE SET status='pending'
-                   RETURNING id""", (item_id, asset["id"], item["employee_id"]), fetch="one")
-            task_ids.append(task["id"])
-            audit.record("asset", "access_review_collection_created", target_type="asset",
-                         target_id=asset["id"], target_label=asset["asset_tag"],
-                         details={"review_item_id": item_id, "employee": item["username"]})
-        remediation = "pending_collection" if task_ids else "remediated"
+        linked = (db.query("SELECT id, status FROM requests WHERE id=%s", (return_request_id,), fetch="one")
+                  if return_request_id else None)
+        if linked and linked["status"] not in ("completed", "rejected"):
+            remediation = RETURN_REMEDIATION.get(linked["status"], "return_pending_hr")
+        else:
+            system = access_review_system_actor()
+            if not system:
+                raise ReviewError("Access-review system account is missing (restart the backend to seed it)", 503)
+            justification = (f"Access review #{item['campaign_id']} item #{item_id}: Director requested return of "
+                             f"{item['service_name']}. Reason: {reason}")
+            return_request_id, error = workflows.raise_return(
+                system["id"], {"id": item["employee_id"]}, item["service_id"], justification, on_behalf=True)
+            if error:
+                raise ReviewError(error, 409)
+            remediation = "return_pending_hr"
     db.query(
         """UPDATE access_review_items SET decision=%s, decision_reason=%s, reviewed_by=%s,
              reviewed_at=now(), remediation_status=%s,
+             return_request_id=%s,
              remediated_at=CASE WHEN %s IN ('accepted','remediated') THEN now() ELSE NULL END
-           WHERE id=%s""", (decision, reason or None, reviewer["id"], remediation, remediation, item_id), fetch=None)
-    if task_ids:
+           WHERE id=%s""", (decision, reason or None, reviewer["id"], remediation,
+                              return_request_id, remediation, item_id), fetch=None)
+    if decision == "revoke":
         db.query("UPDATE access_review_campaigns SET status='remediation' WHERE id=%s",
                  (item["campaign_id"],), fetch=None)
     audit.record("access", f"access_review_item_{decision}", target_type="access_review_item",
                  target_id=item_id, target_label=f"{item['full_name']} / {item['service_name']}",
                  details={"campaign_id": item["campaign_id"], "reason": reason,
-                          "finding": item["finding_code"], "removed_services": service_names(removed),
-                          "asset_tasks": task_ids})
-    return {"decision": decision, "removed_service_ids": removed, "asset_task_ids": task_ids}
+                          "finding": item["finding_code"],
+                          "return_request_id": return_request_id})
+    return {"decision": decision, "return_request_id": return_request_id}
 
 
 def resolve_investigation(item_id, actor, note):
@@ -480,7 +532,7 @@ def close_campaign(campaign_id):
     blockers = db.query(
         """SELECT
              COUNT(*) FILTER (WHERE decision IS NULL) AS undecided,
-             COUNT(*) FILTER (WHERE remediation_status IN ('pending','investigating','pending_collection')) AS unresolved
+             COUNT(*) FILTER (WHERE remediation_status NOT IN ('accepted','remediated')) AS unresolved
            FROM access_review_items WHERE campaign_id=%s""", (campaign_id,), fetch="one")
     if blockers["undecided"] or blockers["unresolved"]:
         raise ReviewError(

@@ -171,6 +171,14 @@ WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'hr-system');
 UPDATE employees SET role = 'system', status = 'inactive', kc_sync_pending = FALSE, email = ''
 WHERE username = 'hr-system';
 
+-- Access reviews raise governed return requests under a separate non-login identity.
+-- Any Requestor can book its appointment, just as they can for HR-system requests.
+INSERT INTO employees (username, full_name, role, status, email, kc_sync_pending)
+SELECT 'access-review-system', 'Access Review System (Automated)', 'system', 'inactive', '', FALSE
+WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'access-review-system');
+UPDATE employees SET role = 'system', status = 'inactive', kc_sync_pending = FALSE, email = ''
+WHERE username = 'access-review-system';
+
 -- Default email for every account that lacks one (admin can edit these later).
 UPDATE employees SET email = username || '@servicejourney.local' WHERE email IS NULL;
 

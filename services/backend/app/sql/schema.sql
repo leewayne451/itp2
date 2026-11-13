@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS access_review_items (
     reviewed_by          INTEGER REFERENCES employees(id),
     reviewed_at          TIMESTAMPTZ,
     remediation_status   TEXT NOT NULL DEFAULT 'pending',
+    return_request_id    INTEGER REFERENCES requests(id) ON DELETE SET NULL,
     remediated_at        TIMESTAMPTZ,
     last_reconciled_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (campaign_id, employee_id, service_id),
@@ -331,8 +332,18 @@ CREATE TABLE IF NOT EXISTS access_review_items (
     CONSTRAINT access_review_item_risk
       CHECK (risk_level IN ('critical', 'high', 'medium', 'low')),
     CONSTRAINT access_review_item_remediation
-      CHECK (remediation_status IN ('pending', 'accepted', 'investigating', 'pending_collection', 'remediated'))
+      CHECK (remediation_status IN ('pending', 'accepted', 'investigating', 'pending_collection', 'remediated',
+                                    'return_pending_hr', 'return_pending_director', 'return_pending_aa',
+                                    'return_pending_it', 'return_pending_appointment', 'return_pending_euss'))
 );
+
+-- Safe upgrade path for databases created before governed review returns existed.
+ALTER TABLE access_review_items ADD COLUMN IF NOT EXISTS return_request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL;
+ALTER TABLE access_review_items DROP CONSTRAINT IF EXISTS access_review_item_remediation;
+ALTER TABLE access_review_items ADD CONSTRAINT access_review_item_remediation
+  CHECK (remediation_status IN ('pending', 'accepted', 'investigating', 'pending_collection', 'remediated',
+                                'return_pending_hr', 'return_pending_director', 'return_pending_aa',
+                                'return_pending_it', 'return_pending_appointment', 'return_pending_euss'));
 
 CREATE TABLE IF NOT EXISTS access_review_asset_tasks (
     id                   SERIAL PRIMARY KEY,

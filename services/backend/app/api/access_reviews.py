@@ -116,7 +116,8 @@ def export(campaign_id):
     writer = csv.writer(buf)
     writer.writerow(["campaign", "department", "employee", "username", "status", "resource",
                      "expected", "actual", "risk", "finding", "source_request", "asset",
-                     "decision", "reason", "reviewer", "reviewed_at", "remediation"])
+                     "decision", "reason", "reviewer", "reviewed_at", "remediation",
+                     "return_request", "return_status"])
     for item in campaign["items"]:
         writer.writerow([_csv_safe(v) for v in (
             campaign["name"], campaign["department_name"], item["employee_name"],
@@ -124,7 +125,8 @@ def export(campaign_id):
             item["expected_access"], item["actual_access"], item["risk_level"],
             "; ".join(item["finding_labels"]), item["source_request_id"], item["asset_tag"],
             item["decision"], item["decision_reason"], item["reviewed_by_name"],
-            item["reviewed_at"], item["remediation_status"])])
+            item["reviewed_at"], item["remediation_status"], item["return_request_id"],
+            item["return_status"])])
     body = buf.getvalue().encode("utf-8-sig")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     audit.record("audit", "access_review_exported", target_type="access_review",

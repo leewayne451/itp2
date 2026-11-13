@@ -672,8 +672,8 @@ temporary password (`username`) with your own. To switch account, **Sign out** f
 
 ## Access review and reconciliation (first iteration)
 
-The **Access reviews** page gives IT Admin, the assigned Director and EUSS one
-controlled review workflow:
+The **Access reviews** page gives IT Admin, the assigned Director (the department
+manager for this workflow) and EUSS one controlled certification workflow:
 
 1. Sign in as **`itadmin`**, open **Access reviews**, and create a campaign for one
    department. Choose `director` as reviewer and a future due date. The campaign
@@ -682,12 +682,15 @@ controlled review workflow:
    campaign is allowed per department; completed campaigns remain as history and
    do not prevent a later review cycle.
 2. Sign out and sign in as **`director`**. Open the assigned campaign and record
-   **Keep**, **Revoke now**, or **Investigate** for each row. Self-review is refused.
+   **Certify access**, **Initiate return**, or **Investigate** for each row. Self-review is refused.
    Reasons are mandatory for exceptions and investigations.
-3. A revoke removes digital access immediately. If the resource has a physical
-   asset, it creates an EUSS collection task but deliberately leaves custody assigned
-   until collection is confirmed.
-4. Sign in as **`euss`**, open **Access reviews**, and confirm each physical retrieval.
+3. Initiating a return creates an automated, linked **return** request. It follows the
+   normal HR → Director → AA → IT → appointment → EUSS flow; access is not removed until
+   EUSS retrieves the asset. Any Requestor can book its appointment because the automated
+   access-review actor cannot sign in.
+4. For the demo, certify Bob's account and initiate return for Alice's laptop. Take
+   Alice's linked return request through the normal approvals, book its appointment as
+   `req`, then have **`euss`** retrieve it.
 5. Sign in as **`itadmin`**. Resolve any investigations (a grant still has to use the
    normal request workflow), run reconciliation, download the CSV evidence, then
    complete the campaign. Completion is blocked while a decision or remediation is
@@ -758,7 +761,7 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | GET | `/api/rotations/planned` | requestor — rotate decisions waiting for a shift request |
 | POST | `/api/rotations/check` | hr — run the due check now (e-mails Directors) |
 | GET/POST | `/api/access-reviews` | it_admin creates; assigned director, IT and EUSS can view according to role |
-| POST | `/api/access-review-items/{id}/decision` | assigned director — keep, revoke or investigate |
+| POST | `/api/access-review-items/{id}/decision` | assigned director — certify, initiate a governed return, or investigate |
 | POST | `/api/access-review-items/{id}/resolve` | it_admin — close an investigation with evidence |
 | POST | `/api/access-review-asset-tasks/{id}/collect` | euss — confirm physical retrieval |
 | POST | `/api/access-reviews/{id}/reconcile` or `/close` | it_admin |

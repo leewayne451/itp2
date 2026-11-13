@@ -46,7 +46,9 @@ def main():
 
     # ------------------------------------------------------------------ accounts live in Keycloak
     print("-- accounts")
-    check("every employee has a Keycloak account", all(kc_user(u) for u in emps), [u for u in emps if not kc_user(u)])
+    login_emps = {u: e for u, e in emps.items() if e["role"] != "system"}
+    check("every login-capable employee has a Keycloak account", all(kc_user(u) for u in login_emps),
+          [u for u in login_emps if not kc_user(u)])
     check("staff roles are in Keycloak's 'staff' group (TOTP required), employees are not",
           all(kc_in_staff(u) == (e["role"] in STAFF) for u, e in emps.items() if e["status"] == "active"))
     check("the API does not expose Keycloak ids or credentials",
