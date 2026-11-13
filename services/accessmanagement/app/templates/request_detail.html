@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Request #{{ r.id }}{% endblock %}
 {% block content %}
-<p><a class="btn-link" href="{{ url_for('dashboard.index') }}">← Back to dashboard</a></p>
+<p><a class="btn-link" href="{{ url_for('dashboard.index') }}">← Back to dashboard</a>
+   · <a class="btn-link" href="{{ url_for('tracker.track', rid=r.id) }}">Track this request</a></p>
 <section class="panel">
   <div class="panel-head"><h2>Request #{{ r.id }} — {{ TYPE_LABEL.get(r.type, r.type) }}</h2></div>
   <div class="detail-grid">

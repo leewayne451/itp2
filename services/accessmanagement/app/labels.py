@@ -24,6 +24,7 @@ ACTION_LABEL = {
     "approved": "Approved", "rejected": "Rejected", "processed": "Processed",
     "provisioned": "Provisioned", "retrieved": "Retrieved",
     "appointment_booked": "Booked appt", "submitted": "Submitted",
+    "appointment_rescheduled": "Moved appt", "appointment_cancelled": "Appt cancelled",
 }
 
 
@@ -67,6 +68,23 @@ def fmt_dt(iso, seconds=False):
         return iso
 
 
+def fmt_day(iso):
+    """'Tue 17 Nov, 10:00' — the tracker's friendlier date (CHANGE 011)."""
+    if not iso:
+        return "—"
+    try:
+        return to_sgt(iso).strftime("%a %d %b, %H:%M")
+    except (ValueError, TypeError):
+        return iso
+
+
+def fmt_hm(iso):
+    try:
+        return to_sgt(iso).strftime("%H:%M") if iso else ""
+    except (ValueError, TypeError):
+        return iso
+
+
 def req_resource(r):
     if r["type"] == "onboard":
         return f"onboard → {r.get('new_department_name') or '?'}"
@@ -82,6 +100,8 @@ def behalf_label(r):
 def register(app):
     app.jinja_env.filters["dt"] = fmt_dt
     app.jinja_env.filters["dts"] = lambda iso: fmt_dt(iso, seconds=True)
+    app.jinja_env.filters["dday"] = fmt_day
+    app.jinja_env.filters["hm"] = fmt_hm
     app.jinja_env.globals.update(
         status_label=status_label, status_class=status_class, req_resource=req_resource,
         behalf_label=behalf_label, rotation_state=rotation_state, ROLE_LABEL=ROLE_LABEL, TYPE_LABEL=TYPE_LABEL, ACTION_LABEL=ACTION_LABEL,

@@ -76,9 +76,10 @@ def main():
     if return_id:
         for user in ("hr", "director", "aa"):
             post(f"/api/requests/{return_id}/approve", {}, tokens[user])
-        post(f"/api/requests/{return_id}/process", {}, tokens["itadmin"])
-        appointment = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
-        post(f"/api/requests/{return_id}/appointment", {"appointment_at": appointment}, tokens["req"])
+        _, processed = post(f"/api/requests/{return_id}/process", {}, tokens["itadmin"])
+        if processed.get("status") == "pending_appointment":   # otherwise auto-booked (CHANGE 011)
+            appointment = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+            post(f"/api/requests/{return_id}/appointment", {"appointment_at": appointment}, tokens["req"])
         code, completed = post(f"/api/requests/{return_id}/retrieve", {}, tokens["euss"])
         check("EUSS completes Alice's governed return", code == 200 and completed.get("status") == "completed", completed)
         # Campaign items are point-in-time evidence; reconciliation refreshes the

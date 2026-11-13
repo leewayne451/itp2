@@ -18,10 +18,11 @@
 
 <section class="panel">
   <div class="panel-head"><h2>① Appointments to book</h2></div>
-  <p class="muted small">IT has processed these — book an appointment to send them to EUSS.</p>
+  <p class="muted small">EUSS appointments are booked automatically when IT finishes a request. These are the
+    ones that could not be: no EUSS slot was free at the time. Book the suggested slot, or pick another one.</p>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Type</th><th>Target</th><th>Resource</th><th>Book</th></tr></thead>
+      <thead><tr><th>#</th><th>Type</th><th>Target</th><th>Resource</th><th>Book an EUSS slot</th></tr></thead>
       <tbody>
         {% if not to_book %}<tr><td colspan="5" class="muted">Nothing to book right now.</td></tr>{% endif %}
         {% for r in to_book %}
@@ -31,10 +32,22 @@
           <td>{{ r.target_name }}</td>
           <td>{{ req_resource(r) }}</td>
           <td>
+            {% if r.slots.suggested %}
             <form method="post" action="{{ url_for('requests.appointment', rid=r.id) }}" class="inline-form">
-              <input type="datetime-local" name="appointment_at" required>
-              <button class="btn-sm primary" type="submit">Book appointment</button>
+              <input type="hidden" name="auto" value="1">
+              <button class="btn-sm primary" type="submit">Book {{ r.slots.suggested.starts_at | dday }}</button>
+              <span class="small muted">{{ r.slots.suggested_reason }}</span>
             </form>
+            <form method="post" action="{{ url_for('requests.appointment', rid=r.id) }}" class="inline-form">
+              <select name="slot_id" required>
+                <option value="">— or pick a slot —</option>
+                {% for s in r.slots.slots %}<option value="{{ s.id }}">{{ s.starts_at | dday }} ({{ s.free }} free)</option>{% endfor %}
+              </select>
+              <button class="btn-sm" type="submit">Book</button>
+            </form>
+            {% else %}
+              <span class="small muted">No EUSS slot is free yet. EUSS can open more slots; this list updates by itself.</span>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
