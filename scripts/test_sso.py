@@ -213,9 +213,10 @@ def main():
         print("(no employee without a laptop left — skipped the grant workflow; use a fresh stack)")
     else:
         ok = all(post(f"/api/requests/{rid}/approve", tok=T[u])[0] == 200 for u in ("hr", "director", "aa"))
-        ok = ok and post(f"/api/requests/{rid}/process", tok=T["itadmin"])[0] == 200
-        ok = ok and post(f"/api/requests/{rid}/appointment", {"appointment_at": "2030-01-07T10:00:00+08:00"},
-                         T["req"])[0] == 200
+        pc, pd = post(f"/api/requests/{rid}/process", tok=T["itadmin"])
+        ok = ok and pc == 200
+        if ok and pd.get("status") == "pending_appointment":   # no EUSS slot was free (CHANGE 011)
+            ok = post(f"/api/requests/{rid}/appointment", {"auto": True}, T["req"])[0] == 200
         assets = get("/api/assets", T["euss"])[1]
         free = {k: next((a["asset_tag"] for a in assets if a["kind"] == k and a["status"] == "available"), None)
                 for k in ("Laptop", "Account")}

@@ -385,3 +385,48 @@ CREATE TABLE IF NOT EXISTS hr_events (
     processed_at      TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS hr_events_received ON hr_events (received_at DESC);
+
+-- --------------------------------------------------------------------------- --
+-- New-hire journey tracker + smart appointment booking  (CHANGE 011)
+-- --------------------------------------------------------------------------- --
+-- EUSS appointment slots. Regular ones come from the EUSS roster (opening hours,
+-- generated a few weeks ahead by app/scheduling.py); EUSS can add one-off slots and
+-- block any slot (leave, training, a public holiday). capacity = desks serving at once.
+CREATE TABLE IF NOT EXISTS euss_slots (
+    id          SERIAL PRIMARY KEY,
+    starts_at   TIMESTAMPTZ NOT NULL,
+    ends_at     TIMESTAMPTZ NOT NULL,
+    location    TEXT NOT NULL,
+    capacity    INTEGER NOT NULL DEFAULT 1,
+    status      TEXT NOT NULL DEFAULT 'open',
+    source      TEXT NOT NULL DEFAULT 'roster',          -- roster | manual
+    note        TEXT,                                    -- why it was blocked / added
+    created_by  INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (starts_at, location),
+    CONSTRAINT euss_slot_status CHECK (status IN ('open', 'blocked')),
+    CONSTRAINT euss_slot_capacity CHECK (capacity >= 0),
+    CONSTRAINT euss_slot_times CHECK (ends_at > starts_at)
+);
+CREATE INDEX IF NOT EXISTS euss_slots_start ON euss_slots (starts_at);
+
+-- Which request holds which slot. A request has at most one live ('booked') booking;
+-- a move keeps the old row as 'moved' so the history shows every change.
+--   method: auto (matched when IT processed it) | chosen (picked by the employee or
+--           requestor) | rematched (its slot was blocked, moved by the system)
+CREATE TABLE IF NOT EXISTS euss_bookings (
+    id          SERIAL PRIMARY KEY,
+    slot_id     INTEGER NOT NULL REFERENCES euss_slots(id),
+    request_id  INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    status      TEXT NOT NULL DEFAULT 'booked',
+    method      TEXT NOT NULL,
+    reason      TEXT,                                    -- why this slot was chosen
+    booked_by   INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ended_at    TIMESTAMPTZ,
+    CONSTRAINT euss_booking_status CHECK (status IN ('booked', 'moved', 'done')),
+    CONSTRAINT euss_booking_method CHECK (method IN ('auto', 'chosen', 'rematched'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS euss_bookings_one_live
+    ON euss_bookings (request_id) WHERE status = 'booked';
+CREATE INDEX IF NOT EXISTS euss_bookings_slot ON euss_bookings (slot_id) WHERE status = 'booked';

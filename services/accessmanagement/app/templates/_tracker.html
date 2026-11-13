@@ -1,0 +1,85 @@
+{# New-hire journey tracker (CHANGE 011): one request shown like a parcel delivery page. #}
+{% macro tracker_card(t, show_link=false) %}
+<section class="panel tracker {{ 'is-late' if t.late }}">
+  <div class="trk-head">
+    <div>
+      <div class="small muted">Request #{{ t.request_id }} · <span class="type-tag {{ t.type }}">{{ TYPE_LABEL.get(t.type, t.type) }}</span>
+        {% if t.summary %} · {{ t.summary }}{% endif %}</div>
+      <h2 class="trk-headline">{{ t.headline }}</h2>
+      <div class="trk-sub">{{ t.subline }}</div>
+    </div>
+    <div class="trk-eta">
+      {% if t.status == 'completed' %}
+        <span class="pill ok">Completed</span>
+      {% elif t.status == 'rejected' %}
+        <span class="pill bad">Stopped</span>
+      {% else %}
+        <div class="small muted">Estimated finish</div>
+        <div class="trk-eta-date">{{ t.eta | dday }}</div>
+        {% if t.late %}<span class="pill bad">Taking longer than usual</span>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="trk-bar" role="progressbar" aria-valuenow="{{ t.progress_pct }}" aria-valuemin="0" aria-valuemax="100">
+    <span style="width: {{ t.progress_pct }}%"></span>
+  </div>
+
+  <div class="trk-body">
+    <ol class="trk-steps">
+      {% for s in t.steps %}
+      <li class="trk-step {{ s.state }}{{ ' late' if s.late }}">
+        <span class="trk-dot" aria-hidden="true">{% if s.state == 'done' %}✓{% elif s.state == 'rejected' %}✕{% endif %}</span>
+        <div class="trk-step-main">
+          <div class="trk-step-label">{{ s.label }}</div>
+          {% if s.state == 'done' %}
+            <div class="trk-meta">{{ s.at | dday }}{% if s.by %} · {{ s.by }}{% endif %}</div>
+          {% elif s.state == 'current' %}
+            <div class="trk-meta"><strong>Waiting on {{ s.waiting_on }}</strong>{% if s.eta %} · expected by {{ s.eta | dday }}{% endif %}</div>
+          {% elif s.state == 'upcoming' %}
+            <div class="trk-meta">{% if s.waiting_on %}{{ s.waiting_on[:1]|upper }}{{ s.waiting_on[1:] }}{% endif %}{% if s.eta %}{{ ' · ' if s.waiting_on }}expected by {{ s.eta | dday }}{% endif %}</div>
+          {% elif s.state == 'rejected' %}
+            <div class="trk-meta">Not approved{% if s.by %} by {{ s.by }}{% endif %} · {{ s.at | dday }}</div>
+          {% endif %}
+          {% if s.note %}<div class="trk-note">{{ s.note }}</div>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <aside class="trk-side">
+      {% if t.appointment and t.status != 'rejected' %}
+      <div class="trk-box appt">
+        <h3>Your EUSS appointment</h3>
+        <div class="trk-appt-when">{{ t.appointment.starts_at | dday }}–{{ t.appointment.ends_at | hm }}</div>
+        <div class="small">{{ t.appointment.location }}</div>
+        {% if t.appointment.method == 'auto' %}<div class="small muted">Booked for you automatically ({{ t.appointment.reason }}).</div>
+        {% elif t.appointment.method == 'rematched' %}<div class="small muted">Moved by the system: the earlier slot was cancelled.</div>{% endif %}
+        {% if t.can_move %}
+          {% if t.alternatives %}
+          <form method="post" action="{{ url_for('tracker.reschedule', rid=t.request_id) }}" class="stack-form">
+            <label>Need a different time?
+              <select name="slot_id" required>
+                <option value="">— pick a free slot —</option>
+                {% for s in t.alternatives %}<option value="{{ s.id }}">{{ s.starts_at | dday }} ({{ s.free }} free)</option>{% endfor %}
+              </select>
+            </label>
+            <button class="btn-sm" type="submit">Move my appointment</button>
+          </form>
+          {% else %}<p class="small muted">No other free slot right now.</p>{% endif %}
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if t.status not in ('completed', 'rejected') %}
+      <div class="trk-box">
+        <h3>What to bring</h3>
+        <ul class="trk-bring">{% for i in t.what_to_bring %}<li>{{ i }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+      <p class="small muted">{{ t.estimate_basis }}</p>
+      {% if show_link %}<a class="btn-sm" href="{{ url_for('tracker.track', rid=t.request_id) }}">Open tracker</a>{% endif %}
+    </aside>
+  </div>
+</section>
+{% endmacro %}

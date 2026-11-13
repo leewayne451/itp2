@@ -79,6 +79,16 @@ services:
       # signed with this shared secret.
       HR_WEBHOOK_SECRET: ${HRMS_WEBHOOK_SECRET:?run python scripts/generate_secrets.py}
       CONSOLE_URL: https://localhost:8080
+      # Smart EUSS appointment booking (CHANGE 011): the EUSS desk's roster (Singapore time).
+      # Requests are booked into the first free slot at least EUSS_LEAD_HOURS after IT is done.
+      APPOINTMENT_AUTO_MATCH: ${APPOINTMENT_AUTO_MATCH:-true}
+      EUSS_LOCATION: ${EUSS_LOCATION:-EUSS Service Desk, Level 1}
+      EUSS_HOURS: ${EUSS_HOURS:-09:00-12:00,14:00-17:00}
+      EUSS_DAYS: ${EUSS_DAYS:-0,1,2,3,4}            # Monday = 0
+      EUSS_SLOT_MINUTES: ${EUSS_SLOT_MINUTES:-30}
+      EUSS_DESKS: ${EUSS_DESKS:-2}                  # people served at the same time
+      EUSS_LEAD_HOURS: ${EUSS_LEAD_HOURS:-24}       # time EUSS needs to prepare the equipment
+      EUSS_HORIZON_DAYS: ${EUSS_HORIZON_DAYS:-21}   # how far ahead slots are opened
     depends_on:
       postgres:
         condition: service_healthy

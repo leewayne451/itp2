@@ -4,7 +4,7 @@ from flask import Flask
 from . import audit, db, passwords, sync
 from .clients import authenticate_client
 from .api import (auth, reference, admin, quotas, requests as requests_api,
-                  audit as audit_api, rotations, journey, hr, access_reviews)
+                  audit as audit_api, rotations, journey, hr, access_reviews, tracker)
 
 
 def create_app():
@@ -12,7 +12,7 @@ def create_app():
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # bound request bodies (documents are base64)
     app.before_request(authenticate_client)
     for module in (auth, reference, admin, quotas, requests_api, audit_api, rotations,
-                   journey, hr, access_reviews):
+                   journey, hr, access_reviews, tracker):
         app.register_blueprint(module.bp)
 
     @app.after_request

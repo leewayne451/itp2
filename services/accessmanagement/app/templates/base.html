@@ -14,6 +14,7 @@
       <div class="topbar-right">
         <span>{{ current_user.full_name }}</span>
         <span class="role-badge">{{ ROLE_LABEL.get(current_user.role, current_user.role) }}</span>
+        {% if current_user.role == 'employee' %}<a class="btn-link" href="{{ url_for('tracker.my_journey') }}">My journey</a>{% endif %}
         {% if current_user.role in ('hr', 'director', 'aa', 'it_admin', 'euss', 'admin') %}<a class="btn-link" href="{{ url_for('journey.index') }}">Analytics</a>{% endif %}
         {% if current_user.role in ('director', 'it_admin', 'euss') %}<a class="btn-link" href="{{ url_for('access_reviews.index') }}">Access reviews</a>{% endif %}
         {% if current_user.role == 'it_admin' %}<a class="btn-link" href="{{ url_for('audit.index') }}">Audit trail</a>{% endif %}

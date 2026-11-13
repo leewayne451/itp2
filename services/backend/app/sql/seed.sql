@@ -179,6 +179,14 @@ WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'access-review-system
 UPDATE employees SET role = 'system', status = 'inactive', kc_sync_pending = FALSE, email = ''
 WHERE username = 'access-review-system';
 
+-- The appointment scheduler (CHANGE 011) books EUSS slots automatically. Like the HR
+-- system it is a non-login identity: it only appears as the actor of those bookings.
+INSERT INTO employees (username, full_name, role, status, email, kc_sync_pending)
+SELECT 'appointment-scheduler', 'Appointment Scheduler (Automated)', 'system', 'inactive', '', FALSE
+WHERE NOT EXISTS (SELECT 1 FROM employees WHERE username = 'appointment-scheduler');
+UPDATE employees SET role = 'system', status = 'inactive', kc_sync_pending = FALSE, email = ''
+WHERE username = 'appointment-scheduler';
+
 -- Default email for every account that lacks one (admin can edit these later).
 UPDATE employees SET email = username || '@servicejourney.local' WHERE email IS NULL;
 
