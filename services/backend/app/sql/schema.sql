@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS requests (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+UPDATE requests SET closed_at=updated_at
+ WHERE status IN ('completed','rejected') AND closed_at IS NULL;
 -- Upgrade existing volumes to the shift-capable shape.
 ALTER TABLE requests ALTER COLUMN service_id DROP NOT NULL;
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS target_department_id INTEGER REFERENCES departments(id);
@@ -97,9 +100,71 @@ CREATE TABLE IF NOT EXISTS request_documents (
     id             SERIAL PRIMARY KEY,
     request_id     INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
     filename       TEXT NOT NULL,
-    content_base64 TEXT NOT NULL,
-    uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    content_base64 TEXT,
+    uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scan_status    TEXT NOT NULL DEFAULT 'pending',
+    pii_summary    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_sha256  TEXT,
+    content_sha256 TEXT,
+    scanned_at     TIMESTAMPTZ,
+    scan_error     TEXT,
+    retention_seconds INTEGER NOT NULL DEFAULT 2592000,
+    retain_until   TIMESTAMPTZ,
+    legal_hold     BOOLEAN NOT NULL DEFAULT FALSE,
+    purged_at      TIMESTAMPTZ,
+    review_note    TEXT,
+    review_action_at TIMESTAMPTZ,
+    reviewed_by_id INTEGER REFERENCES employees(id),
+    removed_at     TIMESTAMPTZ,
+    scan_method    TEXT,
+    ocr_confidence NUMERIC(5,2),
+    legal_hold_reason TEXT,
+    legal_hold_at  TIMESTAMPTZ,
+    legal_hold_by_id INTEGER REFERENCES employees(id),
+    legal_hold_released_at TIMESTAMPTZ,
+    legal_hold_release_reason TEXT,
+    legal_hold_released_by_id INTEGER REFERENCES employees(id)
 );
+-- Upgrade existing databases. Existing attachments are deliberately queued for
+-- scanning rather than being assumed safe.
+ALTER TABLE request_documents ALTER COLUMN content_base64 DROP NOT NULL;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS pii_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS source_sha256 TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scan_error TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS retention_seconds INTEGER NOT NULL DEFAULT 2592000;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS retain_until TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS purged_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS review_action_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS reviewed_by_id INTEGER REFERENCES employees(id);
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scan_method TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS ocr_confidence NUMERIC(5,2);
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_reason TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_by_id INTEGER REFERENCES employees(id);
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_released_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_release_reason TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_released_by_id INTEGER REFERENCES employees(id);
+CREATE INDEX IF NOT EXISTS request_documents_scan_queue ON request_documents (scan_status, id);
+CREATE INDEX IF NOT EXISTS request_documents_retention ON request_documents (retain_until)
+ WHERE purged_at IS NULL AND legal_hold=FALSE;
+
+CREATE TABLE IF NOT EXISTS document_retention_policies (
+    outcome       TEXT PRIMARY KEY CHECK (outcome IN ('completed','rejected')),
+    label         TEXT NOT NULL,
+    retention_seconds INTEGER NOT NULL CHECK (retention_seconds >= 60),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by_id INTEGER REFERENCES employees(id)
+);
+INSERT INTO document_retention_policies (outcome,label,retention_seconds) VALUES
+    ('completed','Completed request documents',300),
+    ('rejected','Rejected request documents',120)
+ON CONFLICT (outcome) DO NOTHING;
 
 -- Chain-of-custody: every time an asset is provisioned to or retrieved from an
 -- employee. Lets EUSS see where a laptop has been and who the last holder was.

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}ServiceJourney — Document privacy review{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div><h2>Document privacy review</h2><p class="muted small">Resolve documents the automated scanner could not safely release.</p></div>
+    <span class="pill {{ 'bad' if items else 'ok' }}">{{ items|length }} open</span>
+  </div>
+  <p class="muted small">Quarantined originals are never released through the normal download route. Retry the scan, request or upload a sanitised replacement, or delete the unsafe copy while requiring replacement evidence.</p>
+</section>
+
+<section class="privacy-stats">
+  <div class="stat-card"><strong>{{ stats.total or 0 }}</strong><span>uploaded</span></div>
+  <div class="stat-card"><strong>{{ stats.redacted or 0 }}</strong><span>redacted</span></div>
+  <div class="stat-card"><strong>{{ stats.awaiting_review or 0 }}</strong><span>awaiting review</span></div>
+  <div class="stat-card"><strong>{{ stats.replacements or 0 }}</strong><span>replacement requested</span></div>
+  <div class="stat-card"><strong>{{ stats.purged or 0 }}</strong><span>purged</span></div>
+  <div class="stat-card"><strong>{{ stats.legal_holds or 0 }}</strong><span>legal holds</span></div>
+  <div class="stat-card {{ 'stat-alert' if stats.overdue else '' }}"><strong>{{ stats.overdue or 0 }}</strong><span>overdue purge</span></div>
+</section>
+
+{% if not items %}
+<section class="panel"><p class="muted">No documents require privacy review.</p></section>
+{% endif %}
+
+{% for d in items %}
+<section class="panel privacy-card">
+  <div class="panel-head">
+    <div>
+      <h3>{{ d.filename }}</h3>
+      <div class="small muted">Request <a href="{{ url_for('requests.detail', rid=d.request_id) }}">#{{ d.request_id }}</a> · {{ d.request_type|capitalize }} · {{ d.target_name }} ({{ d.target_username }})</div>
+    </div>
+    <span class="pill {{ 'bad' if d.scan_status in ('failed','review_required') else 'wait' }}">{{ d.scan_status|replace('_',' ') }}</span>
+  </div>
+  <div class="detail-grid privacy-meta">
+    <div class="detail-row"><span class="detail-k">Requestor</span><span>{{ d.requestor_name }}</span></div>
+    <div class="detail-row"><span class="detail-k">Resource</span><span>{{ d.service_name or 'Department workflow' }}</span></div>
+    <div class="detail-row"><span class="detail-k">Uploaded</span><span>{{ d.uploaded_at|dt }}</span></div>
+    <div class="detail-row"><span class="detail-k">Scanner result</span><span>{{ d.scan_error or 'Replacement requested' }}</span></div>
+    <div class="detail-row"><span class="detail-k">Method</span><span>{{ (d.scan_method or 'not completed')|upper }}{% if d.ocr_confidence is not none %} · {{ '%.1f'|format(d.ocr_confidence|float) }}% OCR confidence{% endif %}</span></div>
+    {% if d.pii_summary %}<div class="detail-row"><span class="detail-k">Detected</span><span>{% for kind,count in d.pii_summary.items() %}{{ count }} {{ kind|replace('_',' ') }}{{ ', ' if not loop.last }}{% endfor %}</span></div>{% endif %}
+    {% if d.review_note %}<div class="detail-row"><span class="detail-k">Review note</span><span>{{ d.review_note }}</span></div>{% endif %}
+  </div>
+
+  <div class="privacy-actions">
+    {% if d.has_content %}<form method="post" action="{{ url_for('privacy_reviews.retry', doc_id=d.id) }}">
+      <button class="btn-sm" type="submit">Retry scan</button>
+    </form>{% endif %}
+
+    <form method="post" action="{{ url_for('privacy_reviews.replace', doc_id=d.id) }}" enctype="multipart/form-data" class="compact-review">
+      <label class="small">Upload sanitised replacement
+        <input type="file" name="documents" accept="application/pdf,.pdf" required>
+      </label>
+      <button class="btn-sm primary" type="submit">Replace and rescan</button>
+    </form>
+
+    {% if d.scan_status != 'replacement_requested' %}
+    <form method="post" action="{{ url_for('privacy_reviews.request_replacement', doc_id=d.id) }}" class="compact-review">
+      <label class="small">Reason for Requestor
+        <input name="reason" required maxlength="500" placeholder="Please upload a text-searchable or sanitised PDF">
+      </label>
+      <button class="btn-sm" type="submit">Request replacement</button>
+    </form>
+    {% endif %}
+
+    {% if d.has_content %}<form method="post" action="{{ url_for('privacy_reviews.remove', doc_id=d.id) }}" class="compact-review">
+      <label class="small">Removal justification
+        <input name="reason" required maxlength="500" placeholder="Unsafe copy removed; replacement evidence is required">
+      </label>
+      <button class="btn-sm danger" type="submit">Remove unsafe copy</button>
+    </form>{% endif %}
+  </div>
+</section>
+{% endfor %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Retention policies</h2></div>
+  <p class="small muted">These short periods support the POC demonstration. Production values must follow MND's approved records schedule. Policy changes apply when a request subsequently closes.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Outcome</th><th>Policy</th><th>Seconds</th><th>Last updated</th><th></th></tr></thead>
+    <tbody>{% for p in policies %}<tr>
+      <td>{{ p.outcome }}</td><td>{{ p.label }}</td>
+      <td><form method="post" action="{{ url_for('privacy_reviews.update_policy', outcome=p.outcome) }}" class="inline-policy"><input type="number" name="retention_seconds" min="60" max="315360000" value="{{ p.retention_seconds }}" required><button class="btn-sm" type="submit">Update</button></form></td>
+      <td>{{ p.updated_at|dt }}{% if p.updated_by_name %}<div class="small muted">{{ p.updated_by_name }}</div>{% endif %}</td><td></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Retention and legal holds</h2></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Request</th><th>Document</th><th>Status</th><th>Deadline</th><th>Legal hold</th><th>Action</th></tr></thead>
+    <tbody>
+      {% if not retention %}<tr><td colspan="6" class="muted">No closed-request documents yet.</td></tr>{% endif %}
+      {% for d in retention %}<tr>
+        <td><a href="{{ url_for('requests.detail', rid=d.request_id) }}">#{{ d.request_id }}</a><div class="small muted">{{ d.target_name }} · {{ d.request_status }}</div></td>
+        <td>{{ d.filename }}</td><td>{{ d.scan_status|replace('_',' ') }}</td>
+        <td>{{ d.retain_until|dt }}{% if d.purged_at %}<div class="small muted">Purged {{ d.purged_at|dt }}</div>{% endif %}</td>
+        <td>{% if d.legal_hold %}<span class="pill wait">active</span><div class="small">{{ d.legal_hold_reason }}</div>{% else %}<span class="muted">none</span>{% endif %}</td>
+        <td>{% if not d.purged_at %}
+          {% if d.legal_hold %}<form method="post" action="{{ url_for('privacy_reviews.release_legal_hold', doc_id=d.id) }}" class="compact-review"><input name="reason" required maxlength="500" placeholder="Reason for release"><button class="btn-sm" type="submit">Release hold</button></form>
+          {% else %}<form method="post" action="{{ url_for('privacy_reviews.legal_hold', doc_id=d.id) }}" class="compact-review"><input name="reason" required maxlength="500" placeholder="Investigation or records reason"><button class="btn-sm" type="submit">Apply hold</button></form>{% endif %}
+        {% else %}<span class="small muted">Content already purged</span>{% endif %}</td>
+      </tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

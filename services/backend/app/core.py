@@ -62,7 +62,11 @@ def get_request(rid):
 
 
 def set_status(rid, status):
-    db.query("UPDATE requests SET status = %s, updated_at = now() WHERE id = %s", (status, rid), fetch=None)
+    db.query(
+        """UPDATE requests SET status=%s, updated_at=now(),
+             closed_at=CASE WHEN %s IN ('completed','rejected')
+                            THEN COALESCE(closed_at, now()) ELSE closed_at END
+           WHERE id=%s""", (status, status, rid), fetch=None)
 
 
 def add_event(rid, actor_id, action, note=None, notify_incoming=True, notify_target=True, background=False):
@@ -217,8 +221,10 @@ def attach_documents(rid, documents):
         filename = (doc.get("filename") or "document").strip()
         content = doc.get("content_base64") or ""
         if content:
-            db.query("INSERT INTO request_documents (request_id, filename, content_base64) VALUES (%s,%s,%s)",
-                     (rid, filename, content), fetch=None)
+            db.query(
+                """INSERT INTO request_documents
+                     (request_id, filename, content_base64, scan_status)
+                   VALUES (%s,%s,%s,'pending')""", (rid, filename, content), fetch=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -464,8 +470,27 @@ def request_dict(row, with_events=False):
             "action": e["action"], "note": e["note"], "created_at": e["created_at"].isoformat(),
             "actor_name": e["actor_name"], "actor_role": e["actor_role"],
         } for e in evs]
-        docs = db.query("SELECT id, filename FROM request_documents WHERE request_id=%s ORDER BY id", (row["id"],))
-        d["documents"] = [{"id": x["id"], "filename": x["filename"]} for x in docs]
+        docs = db.query(
+            """SELECT id, filename, scan_status, pii_summary, scan_error,
+                      retain_until, legal_hold, purged_at, scanned_at, review_note,
+                      review_action_at, removed_at, scan_method, ocr_confidence,
+                      legal_hold_reason, legal_hold_at
+                 FROM request_documents WHERE request_id=%s ORDER BY id""", (row["id"],))
+        d["documents"] = [{
+            "id": x["id"], "filename": x["filename"], "scan_status": x["scan_status"],
+            "pii_summary": x["pii_summary"] or {}, "scan_error": x["scan_error"],
+            "retain_until": x["retain_until"].isoformat() if x["retain_until"] else None,
+            "legal_hold": x["legal_hold"],
+            "purged_at": x["purged_at"].isoformat() if x["purged_at"] else None,
+            "scanned_at": x["scanned_at"].isoformat() if x["scanned_at"] else None,
+            "review_note": x["review_note"],
+            "review_action_at": x["review_action_at"].isoformat() if x["review_action_at"] else None,
+            "removed_at": x["removed_at"].isoformat() if x["removed_at"] else None,
+            "scan_method": x["scan_method"],
+            "ocr_confidence": float(x["ocr_confidence"]) if x["ocr_confidence"] is not None else None,
+            "legal_hold_reason": x["legal_hold_reason"],
+            "legal_hold_at": x["legal_hold_at"].isoformat() if x["legal_hold_at"] else None,
+        } for x in docs]
     return d
 
 

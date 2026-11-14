@@ -7,7 +7,8 @@ from flask import Flask, session, redirect, url_for, request, abort, flash
 from . import config, labels
 from .backend_client import AuthExpired
 from .views import (auth, dashboard, requests as req_views, admin, quotas, assets,
-                    security, audit, rotations, journey, access_reviews, tracker)
+                    security, audit, rotations, journey, access_reviews, tracker,
+                    privacy_reviews)
 
 
 def create_app():
@@ -55,7 +56,7 @@ def create_app():
         return resp
 
     for module in (auth, dashboard, req_views, admin, quotas, assets, security,
-                   audit, rotations, journey, access_reviews, tracker):
+                   audit, rotations, journey, access_reviews, tracker, privacy_reviews):
         app.register_blueprint(module.bp)
 
     labels.register(app)

@@ -13,6 +13,7 @@
 {% macro doc_and_submit(label) %}
   <label>Justification <textarea name="justification" rows="2" placeholder="optional"></textarea></label>
   <label>Supporting documents (PDF only, optional) <input type="file" name="documents" accept="application/pdf,.pdf" multiple></label>
+  <p class="small muted">Uploads are privacy-scanned before approvers can open them. Detected NRIC/FIN, phone, email and address text is permanently masked.</p>
   <button class="primary" type="submit">{{ label }}</button>
 {% endmacro %}
 

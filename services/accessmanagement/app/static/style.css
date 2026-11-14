@@ -116,6 +116,23 @@ code { background: #f1f5f9; padding: .1rem .35rem; border-radius: 4px; }
 .tl-note { font-size: .82rem; margin-top: .1rem; }
 .docs { display: flex; flex-wrap: wrap; gap: .4rem; }
 .doc-btn { background: #eef2ff; border-color: #c7d2fe; }
+.document-list { display: grid; gap: .55rem; margin-top: .5rem; }
+.document-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.document-row:last-child { border-bottom: 0; }
+.text-error { color: #b91c1c; }
+.privacy-card h3 { margin: 0 0 .2rem; }
+.privacy-meta { margin-top: .8rem; }
+.privacy-actions { display: flex; align-items: flex-end; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+.privacy-actions form { margin: 0; }
+.privacy-actions .compact-review { min-width: 15rem; flex: 1 1 15rem; }
+.replacement-form { display: flex; gap: .7rem; align-items: flex-end; flex-wrap: wrap; padding: .7rem 0; border-bottom: 1px solid var(--line); }
+.privacy-stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: .7rem; margin: 1rem 0; }
+.stat-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: .8rem; display: grid; gap: .2rem; }
+.stat-card strong { font-size: 1.35rem; }
+.stat-card span { color: var(--muted); font-size: .8rem; }
+.stat-card.stat-alert { border-color: #fecaca; background: #fef2f2; }
+.inline-policy { display: flex; gap: .4rem; align-items: center; }
+.inline-policy input { width: 8rem; }
 
 /* ---- two-factor authentication (TOTP) ---- */
 .login-card.wide { width: min(460px, 100%); }

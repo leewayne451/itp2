@@ -758,6 +758,67 @@ Reconciliation refreshes changed evidence and returns unexpected drift to the
 Director. Changes caused by an approved revoke or its asset collection retain the
 original review decision.
 
+## Personal-data document protection and retention
+
+Supporting PDFs are quarantined and scanned by the backend before an approver can
+open them. Text PDFs are checked for checksum-valid NRIC/FIN values, Singapore phone
+numbers, e-mail addresses and likely postal addresses. Matches are removed with true
+PDF redactions; the original bytes are replaced by the protected derivative. Image-only
+and mixed-image pages are OCR-scanned with Tesseract, redacted using word coordinates,
+flattened so the source pixels are removed, then OCR-checked again. OCR results below the
+configured confidence threshold fail closed as **review required**.
+
+The request detail page shows `pending`, `clean`, `redacted`, `review required`,
+`failed` or `purged`. HR cannot approve while a document is unsafe. When a request is
+completed or rejected, its outcome policy starts the retention clock. The background
+worker deletes due content unless an audited legal hold is active, while retaining hashes,
+detection counts, timestamps and tamper-evident audit events. IT Admin's **Privacy review**
+page shows scan statistics, exceptions, retention policies, deadlines and legal holds.
+
+The POC default is 30 days. For a deterministic approval-gate and two-minute purge
+demonstration, put the following in `.env`, then recreate the backend:
+
+```env
+DOCUMENT_SCAN_INTERVAL_SECONDS=3
+DOCUMENT_MIN_QUARANTINE_SECONDS=30
+DOCUMENT_PURGE_INTERVAL_SECONDS=10
+DOCUMENT_OCR_DPI=200
+DOCUMENT_OCR_MIN_CONFIDENCE=60
+```
+
+The scan interval controls how often the worker checks; the minimum quarantine is the
+setting that guarantees approval remains blocked for 30 seconds. The seeded POC policies
+retain completed-request documents for 300 seconds and rejected-request documents for 120
+seconds; IT Admin can edit them on the dashboard. Production values must come from MND's
+approved records schedule.
+
+Generate both safe test fixtures with:
+
+```powershell
+python scripts/generate_pdpa_test_pdf.py
+```
+
+It writes:
+
+- `output/pdf/pdpa-synthetic-test-document.pdf`, a searchable PDF that is automatically redacted;
+- `output/pdf/pdpa-image-only-test-document.pdf`, a scanned-style PDF that is OCR-redacted.
+
+### Document privacy exception workflow
+
+Low-confidence OCR, failed scans and failed redaction verification remain quarantined and
+appear under **Privacy review** for IT Admin. The original cannot be downloaded through
+the normal request route. IT Admin can retry the protected scan, request a replacement from
+the owning Requestor, upload a sanitised replacement, or remove an unsafe copy with a
+mandatory justification. Replacements return to quarantine and must pass scanning before
+HR approval becomes available. Removal deletes the unsafe stored bytes but keeps the request
+blocked in `replacement requested` until a safe replacement passes scanning. The filename,
+reason, reviewer, timestamp and append-only audit evidence are retained.
+
+IT Admin may apply a legal hold to any retained closed-request document with a mandatory
+reason. Due content remains available while held. Releasing the hold also requires a reason;
+if its deadline has passed, the next purge cycle deletes the content. Policy changes and both
+hold actions are recorded in the append-only audit trail.
+
 ## Live session termination
 
 The service dockers re-validate against the backend on every `/success` load and
@@ -809,6 +870,12 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | GET | `/api/requests/mine`, `/api/requests/queue` | any auth (role-scoped) |
 | GET | `/api/requests`, `/api/requests/{id}` | admin / owner+staff |
 | POST | `/api/requests/{id}/approve` | hr, director, aa (their stage) |
+| GET | `/api/privacy-documents` | it_admin — documents awaiting privacy action |
+| GET | `/api/privacy-dashboard` | it_admin — statistics, policies, retention and holds |
+| POST | `/api/privacy-documents/{id}/retry`, `/request-replacement`, `/remove` | it_admin |
+| POST | `/api/privacy-documents/{id}/replace` | it_admin or the owning requestor |
+| POST | `/api/privacy-documents/{id}/legal-hold`, `/legal-hold/release` | it_admin |
+| POST | `/api/privacy-retention-policies/{completed\|rejected}` | it_admin |
 | POST | `/api/requests/{id}/reject` | approver/it at their stage |
 | POST | `/api/requests/{id}/process` | it_admin (grants access) |
 | POST | `/api/requests/{id}/appointment` | requestor (owner) — `{"slot_id":…}`, `{"auto":true}` or legacy `{"appointment_at":…}` |

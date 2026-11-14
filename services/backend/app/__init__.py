@@ -1,10 +1,11 @@
 """Backend application factory."""
 from flask import Flask
 
-from . import audit, db, passwords, sync
+from . import audit, db, document_privacy, passwords, sync
 from .clients import authenticate_client
 from .api import (auth, reference, admin, quotas, requests as requests_api,
-                  audit as audit_api, rotations, journey, hr, access_reviews, tracker)
+                  audit as audit_api, rotations, journey, hr, access_reviews, tracker,
+                  privacy_reviews)
 
 
 def create_app():
@@ -12,7 +13,7 @@ def create_app():
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # bound request bodies (documents are base64)
     app.before_request(authenticate_client)
     for module in (auth, reference, admin, quotas, requests_api, audit_api, rotations,
-                   journey, hr, access_reviews, tracker):
+                   journey, hr, access_reviews, tracker, privacy_reviews):
         app.register_blueprint(module.bp)
 
     @app.after_request
@@ -33,5 +34,6 @@ def bootstrap():
 
 def start_background():
     """Keycloak user sync (with credential migration) + Keycloak event ingestion
-    + the Mandatory Job Rotation due check (CHANGE 006)."""
+    + the Mandatory Job Rotation due check + document privacy/retention."""
     sync.start_background()
+    document_privacy.start_background()

@@ -1,7 +1,7 @@
 """The request lifecycle: creation, listing, and every workflow transition."""
 from flask import Blueprint, request, jsonify, g
 
-from .. import audit, db, rotation, scheduling, sync
+from .. import audit, db, document_privacy, rotation, scheduling, sync
 from ..auth import require_auth, require_role
 from ..core import (
     STATE_ROLE, APPROVAL_NEXT, STAFF_ROLES, KIND_OF,
@@ -211,14 +211,24 @@ def request_detail(rid):
 @bp.get("/api/documents/<int:doc_id>")
 @require_auth
 def get_document(doc_id):
-    doc = db.query("""SELECT d.filename, d.content_base64, r.requestor_id
+    doc = db.query("""SELECT d.id, d.request_id, d.filename, d.content_base64,
+                             d.scan_status, d.pii_summary, r.requestor_id
                       FROM request_documents d JOIN requests r ON r.id = d.request_id
                       WHERE d.id=%s""", (doc_id,), fetch="one")
     if not doc:
         return jsonify(error="Document not found"), 404
     if not _may_view(doc["requestor_id"]):
         return jsonify(error="Forbidden"), 403
-    return jsonify(filename=doc["filename"], content_base64=doc["content_base64"])
+    if doc["scan_status"] == "purged":
+        return jsonify(error="This document has been purged under the retention policy"), 410
+    if doc["scan_status"] not in document_privacy.SAFE_STATUSES or not doc["content_base64"]:
+        return jsonify(error=f"Document is not available ({doc['scan_status'].replace('_', ' ')})"), 409
+    audit.record("audit", "document_downloaded", target_type="document", target_id=doc_id,
+                 target_label=f"document #{doc_id}",
+                 details={"request_id": doc["request_id"], "scan_status": doc["scan_status"],
+                          "detected_types": doc["pii_summary"] or {}})
+    return jsonify(filename=doc["filename"], content_base64=doc["content_base64"],
+                   scan_status=doc["scan_status"])
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +250,9 @@ def approve(rid):
                      target_type="request", target_id=rid,
                      target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
         return jsonify(error="You can't approve a request that is about you (separation of duties)."), 403
+    blocker = document_privacy.approval_blocker(rid)
+    if blocker:
+        return jsonify(error=blocker), 409
     set_status(rid, APPROVAL_NEXT[status])
     add_event(rid, g.user["id"], "approved", f"Approved by {g.user['role']}")
     return jsonify(request_dict(get_joined(rid)))
@@ -262,7 +275,8 @@ def reject(rid):
                      target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
         return jsonify(error="You can't reject a request that is about you (separation of duties)."), 403
     reason = (request.get_json(silent=True) or {}).get("reason", "").strip() or "No reason given"
-    db.query("UPDATE requests SET status='rejected', reject_reason=%s, updated_at=now() WHERE id=%s", (reason, rid), fetch=None)
+    db.query("UPDATE requests SET reject_reason=%s WHERE id=%s", (reason, rid), fetch=None)
+    set_status(rid, "rejected")
     if req["type"] == "shift":  # a rejected shift lifts the suspension
         db.query("UPDATE employees SET status='active' WHERE id=%s AND status='suspended'",
                  (req["target_employee_id"],), fetch=None)

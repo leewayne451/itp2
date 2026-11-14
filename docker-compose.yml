@@ -89,6 +89,16 @@ services:
       EUSS_DESKS: ${EUSS_DESKS:-2}                  # people served at the same time
       EUSS_LEAD_HOURS: ${EUSS_LEAD_HOURS:-24}       # time EUSS needs to prepare the equipment
       EUSS_HORIZON_DAYS: ${EUSS_HORIZON_DAYS:-21}   # how far ahead slots are opened
+      # Personal-data document protection (CHANGE 012). Production must replace the
+      # 30-day POC default with MND's approved records-retention schedule. For a quick
+      # purge demo set DOCUMENT_RETENTION_SECONDS=120 in .env and rebuild the backend.
+      DOCUMENT_SCAN_INTERVAL_SECONDS: ${DOCUMENT_SCAN_INTERVAL_SECONDS:-3}
+      # Separate from polling: guarantees a visible quarantine window for approval-gate testing.
+      DOCUMENT_MIN_QUARANTINE_SECONDS: ${DOCUMENT_MIN_QUARANTINE_SECONDS:-0}
+      DOCUMENT_RETENTION_SECONDS: ${DOCUMENT_RETENTION_SECONDS:-2592000}
+      DOCUMENT_PURGE_INTERVAL_SECONDS: ${DOCUMENT_PURGE_INTERVAL_SECONDS:-30}
+      DOCUMENT_OCR_DPI: ${DOCUMENT_OCR_DPI:-200}
+      DOCUMENT_OCR_MIN_CONFIDENCE: ${DOCUMENT_OCR_MIN_CONFIDENCE:-60}
     depends_on:
       postgres:
         condition: service_healthy
