@@ -220,11 +220,13 @@ services:
       # Single sign-on (OpenID Connect client registered in Keycloak).
       OIDC_CLIENT_SECRET: ${OIDC_CONSOLE_SECRET:?run python scripts/generate_secrets.py}
       APP_URL: https://localhost:8080
+      CHATBOT_PREVIEW_ENABLED: "true"
       KEYCLOAK_URL: https://keycloak:8443
       KEYCLOAK_PUBLIC_URL: https://localhost:8443
     depends_on: [backend]
     ports:
       - "8080:8080"
+      - "127.0.0.1:8180:8080"
     networks: [appnet]
 
   service1:
