@@ -297,6 +297,11 @@ HRMS (https://localhost:8091)  --signed POST /api/hr/events-->  backend
 | `transfer` | Raises a **shift** request (same behaviour as a human-raised shift: the employee is suspended while it is in flight). |
 | `resign` | **1. Kill switch:** the employee is set `inactive`, every access token and service session is refused at once, and Keycloak disables the account and signs them out of every app (retried in the background if Keycloak is down). **2.** Any other open request for them (onboard / shift / grant) is closed, so nobody can process it and re-activate a leaver. **3.** One **return** request is raised for the account service, which takes back the laptop **and** the account (both assets). The kill switch is applied and audited *before* the return request exists, and is never undone by a later failure. Entitlements stay in place until EUSS retrieves them, but every service already denies an inactive employee. |
 
+For a resignation, HRMS records the employee's last working date. Today executes the
+kill switch immediately; a future date schedules the shared offboarding workflow for
+23:59:59 Singapore time on that date. The schedule survives restarts and raises the
+Return request only when the cut-off actually executes.
+
 **The requestor is the system actor.** Requests raised this way show **HR System (Automated)**
 (account `hr-system`, role `system`) as requestor in the console, the request timeline and the
 audit trail. That account cannot sign in: it is `inactive`, never synced to Keycloak, has no
@@ -803,18 +808,19 @@ next authorization check. Configure the poll interval with
 
 ## Scheduled and emergency leaver cut-off
 
-HR and IT Admin have a **Leaver offboarding** panel and may schedule an employee's
-cut-off in Singapore time. Only IT Admin may use **Emergency offboard** for immediate
-kill switch; both actions require a reason. At execution the backend marks the employee inactive first, advances the local
+HRMS is the source of truth for planned resignations: HR records the last working date
+there and may cancel it there before execution. ServiceJourney displays no competing
+schedule controls. Only IT Admin has **Emergency offboard** in ServiceJourney for an immediate
+kill switch; every action requires a reason. At execution the backend marks the employee inactive first, advances the local
 token cut-off and requests Keycloak logout, closes conflicting open requests and raises one
 automated Return request. Entitlements remain recorded as recovery evidence until that
 request reaches EUSS, which retrieves the equipment and revokes the access. The local
 inactive status and token cut-off take effect even when Keycloak is unavailable; its
 disable/logout remains queued for retry.
 
-Scheduled cut-offs are checked every `OFFBOARDING_INTERVAL_SECONDS` (default `10`). They
-can be cancelled before execution. Completed offboarding is idempotent, cannot be undone
-through the Admin status toggle, and records the actor, trigger, reason, removed access,
+Scheduled cut-offs are checked every `OFFBOARDING_INTERVAL_SECONDS` (default `10`). Completed
+offboarding is idempotent, cannot be undone through the Admin status toggle, and records
+the actor, trigger, reason, retained recovery evidence,
 closed requests, session action and linked Return request in the tamper-evident audit trail.
 
 ## Personal-data document protection and retention

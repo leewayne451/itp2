@@ -16,8 +16,9 @@ import hashlib
 import hmac
 import re
 import time
+from datetime import date
 
-EVENT_TYPES = ("hire", "transfer", "resign")
+EVENT_TYPES = ("hire", "transfer", "resign", "cancel_resignation")
 MAX_SKEW_SECONDS = 300
 
 _EVENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,63}$")
@@ -92,11 +93,17 @@ def validate_event(obj):
     if email and not _EMAIL.match(email):
         raise EventError("employee.email is not a valid address")
     department = _text(obj.get("department"), "department", max_len=80, required=etype in ("hire", "transfer"))
+    effective_date = _text(obj.get("effective_date"), "effective_date", max_len=10, required=False) or None
+    if effective_date:
+        try:
+            date.fromisoformat(effective_date)
+        except ValueError as exc:
+            raise EventError("effective_date must be YYYY-MM-DD") from exc
     return {
         "event_id": event_id, "type": etype,
         "employee": {"username": username, "full_name": full_name, "email": email or None},
         "department": department or None,
         "occurred_at": _text(obj.get("occurred_at"), "occurred_at", max_len=40, required=False) or None,
-        "effective_date": _text(obj.get("effective_date"), "effective_date", max_len=10, required=False) or None,
+        "effective_date": effective_date,
         "reason": _text(obj.get("reason"), "reason", max_len=500, required=False) or None,
     }

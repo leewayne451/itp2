@@ -70,8 +70,6 @@ def _approver():
         mjr_tracked=[o for o in officers if o["state"] in ("rotation_planned", "shift_in_progress", "kept")],
         mjr_all=officers,
         departments=get_json("/api/departments", default=[]) if role == "director" else [],
-        offboarding_employees=[e for e in get_json("/api/employees", default=[])
-                               if e["role"] == "employee"] if role == "hr" else [],
     )
 
 

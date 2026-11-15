@@ -2,8 +2,6 @@
 {% import "_macros.html" as m %}
 {% block content %}
 
-{% if current_user.role == 'hr' %}{% include "_offboarding.html" %}{% endif %}
-
 <section class="panel">
   <div class="panel-head"><h2>{{ ROLE_LABEL.get(current_user.role) }} approval queue</h2></div>
   <div class="table-wrap">

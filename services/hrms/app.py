@@ -91,6 +91,24 @@ def _person(username):
     return next((p for p in STATE["people"] if p["username"] == username), None)
 
 
+def _rollover_resignations():
+    """After the last working day, reflect the executed schedule in HRMS itself."""
+    today = datetime.now(SGT).date()
+    changed = False
+    for person in STATE["people"]:
+        if person.get("status") != "resignation scheduled" or not person.get("resignation_date"):
+            continue
+        try:
+            due = datetime.fromisoformat(person["resignation_date"]).date()
+        except ValueError:
+            continue
+        if due < today:  # backend executes at 23:59:59 SGT on `due`
+            person["status"] = "resigned"
+            changed = True
+    if changed:
+        _save(STATE)
+
+
 # --------------------------------------------------------------------------- #
 # Delivery
 # --------------------------------------------------------------------------- #
@@ -147,7 +165,7 @@ def _retry_loop():
 # --------------------------------------------------------------------------- #
 # Recording an event
 # --------------------------------------------------------------------------- #
-def _record(etype, person, department=None, reason=None):
+def _record(etype, person, department=None, reason=None, effective_date=None):
     """Update the HR record, then send the event. Returns the event dict."""
     payload = {
         "event_id": f"hr-{uuid.uuid4()}",
@@ -155,7 +173,7 @@ def _record(etype, person, department=None, reason=None):
         "occurred_at": _now(),
         "employee": {"username": person["username"], "full_name": person["full_name"], "email": person["email"]},
         "department": department,
-        "effective_date": datetime.now(SGT).date().isoformat(),
+        "effective_date": effective_date or datetime.now(SGT).date().isoformat(),
         "reason": reason or None,
     }
     ev = {"event_id": payload["event_id"], "type": etype, "username": person["username"],
@@ -176,10 +194,16 @@ def _flash_result(ev):
         bits = []
         if resp.get("kill_switch"):
             bits.append("kill switch applied — suspended everywhere")
+        if resp.get("scheduled"):
+            bits.append(f"offboarding scheduled for {resp.get('effective_date')}")
+        if resp.get("schedule_cancelled"):
+            bits.append("scheduled resignation cancelled")
         if resp.get("employee_created"):
             bits.append("employee created")
         if resp.get("request_id"):
             bits.append(f"{resp['request_type']} request #{resp['request_id']} raised")
+        elif resp.get("return_request"):
+            bits.append(f"return request #{resp['return_request']} raised")
         elif resp.get("return_note"):
             bits.append(resp["return_note"])
         flash(f"{ev['type'].title()} recorded and delivered: " + ("; ".join(bits) or "done") + ".", "ok")
@@ -222,9 +246,11 @@ def _sgt(iso):
 @app.get("/")
 def index():
     with _lock:
+        _rollover_resignations()
         people = sorted(STATE["people"], key=lambda p: (p["status"] != "active", p["full_name"]))
         events = list(STATE["events"][:50])
-    return render_template("index.html", people=people, events=events, departments=DEPARTMENTS, backend=BACKEND_URL)
+    return render_template("index.html", people=people, events=events, departments=DEPARTMENTS,
+                           backend=BACKEND_URL, now_date=datetime.now(SGT).date().isoformat())
 
 
 @app.post("/hire")
@@ -272,14 +298,46 @@ def transfer():
 @app.post("/resign")
 def resign():
     f = request.form
+    effective_date = f.get("effective_date", "").strip()
+    try:
+        effective = datetime.fromisoformat(effective_date).date()
+    except ValueError:
+        flash("Enter a valid last working date.", "error")
+        return redirect(url_for("index"))
+    if effective < datetime.now(SGT).date():
+        flash("Last working date cannot be in the past.", "error")
+        return redirect(url_for("index"))
     with _lock:
         person = _person(f.get("username", ""))
         if not person or person["status"] != "active":
             flash("Pick an active employee.", "error")
             return redirect(url_for("index"))
-        person["status"] = "resigned"
+        person["status"] = "resigned" if effective == datetime.now(SGT).date() else "resignation scheduled"
+        person["resignation_date"] = effective.isoformat()
         _save(STATE)
-    _flash_result(_record("resign", person, None, f.get("reason") or "Resignation"))
+    _flash_result(_record("resign", person, None, f.get("reason") or "Resignation",
+                          effective_date=effective.isoformat()))
+    return redirect(url_for("index"))
+
+
+@app.post("/resignation/cancel")
+def cancel_resignation():
+    f = request.form
+    reason = f.get("reason", "").strip()
+    if len(reason) < 3:
+        flash("A cancellation reason of at least 3 characters is required.", "error")
+        return redirect(url_for("index"))
+    with _lock:
+        person = _person(f.get("username", ""))
+        if not person or person.get("status") != "resignation scheduled":
+            flash("Pick an employee with a scheduled resignation.", "error")
+            return redirect(url_for("index"))
+        effective_date = person.get("resignation_date")
+        person["status"] = "active"
+        person.pop("resignation_date", None)
+        _save(STATE)
+    _flash_result(_record("cancel_resignation", person, None, reason,
+                          effective_date=effective_date))
     return redirect(url_for("index"))
 
 

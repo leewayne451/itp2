@@ -1,4 +1,4 @@
-"""HR/IT console actions for leaver cut-off."""
+"""IT Admin console action for emergency leaver cut-off."""
 from flask import Blueprint, flash, redirect, request, url_for
 
 from . import role_required
@@ -9,28 +9,6 @@ bp = Blueprint("offboarding", __name__)
 
 def _back():
     return redirect(request.referrer or url_for("dashboard.index"))
-
-
-@bp.post("/employees/<int:emp_id>/offboarding/schedule")
-@role_required("hr", "it_admin")
-def schedule(emp_id):
-    resp = call("POST", f"/api/employees/{emp_id}/offboarding/schedule", json={
-        "effective_at": request.form.get("effective_at", ""),
-        "reason": request.form.get("reason", "").strip(),
-    })
-    flash("Offboarding scheduled." if resp.ok else error_of(resp), "ok" if resp.ok else "error")
-    return _back()
-
-
-@bp.post("/employees/<int:emp_id>/offboarding/cancel")
-@role_required("hr", "it_admin")
-def cancel(emp_id):
-    resp = call("DELETE", f"/api/employees/{emp_id}/offboarding/schedule", json={
-        "reason": request.form.get("reason", "").strip(),
-    })
-    flash("Scheduled offboarding cancelled." if resp.ok else error_of(resp),
-          "ok" if resp.ok else "error")
-    return _back()
 
 
 @bp.post("/employees/<int:emp_id>/offboard")

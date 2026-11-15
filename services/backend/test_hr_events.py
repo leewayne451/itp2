@@ -54,6 +54,9 @@ v = hr.validate_event(ok)
 check("hire validates and username is lower-cased", v["employee"]["username"] == "nina" and v["department"] == "Sales")
 check("resign needs no department or full name",
       hr.validate_event({"event_id": "hr-1234abcd", "type": "resign", "employee": {"username": "alice"}})["department"] is None)
+check("resignation cancellation needs no department or full name",
+      hr.validate_event({"event_id": "hr-1234abcd", "type": "cancel_resignation",
+                         "employee": {"username": "alice"}})["department"] is None)
 check("transfer needs a department", raises(hr.EventError, hr.validate_event,
       {"event_id": "hr-1234abcd", "type": "transfer", "employee": {"username": "alice"}}))
 check("hire needs a full name", raises(hr.EventError, hr.validate_event,
@@ -66,6 +69,9 @@ check("bad e-mail rejected", raises(hr.EventError, hr.validate_event, dict(ok, e
 check("non-object body rejected", raises(hr.EventError, hr.validate_event, ["x"]))
 check("non-text field rejected", raises(hr.EventError, hr.validate_event, dict(ok, department=5)))
 check("over-long reason rejected", raises(hr.EventError, hr.validate_event, dict(ok, reason="x" * 501)))
+check("invalid effective date rejected", raises(hr.EventError, hr.validate_event,
+      {"event_id": "hr-1234abcd", "type": "resign", "employee": {"username": "alice"},
+       "effective_date": "2026-99-99"}))
 
 print("\nFAILED: " + ", ".join(failed) if failed else "\nAll checks passed.")
 sys.exit(1 if failed else 0)

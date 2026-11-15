@@ -25,18 +25,20 @@ Delivery guarantees: authenticated by HMAC (hr_events.py), each event id is proc
 here is idempotent, so a retry after a crash resumes instead of duplicating.
 """
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint, request, jsonify, g
 
-from .. import audit, db, sync, workflows
+from .. import audit, db, offboarding, sync, workflows
 from ..auth import require_role
 from ..config import HR_WEBHOOK_SECRET, CONSOLE_URL
-from ..core import add_event, has_access, service_by_type, system_actor
+from ..core import system_actor
 from ..hr_events import EventError, SignatureError, validate_event, verify_signature
 from ..mailer import send_email
 
 bp = Blueprint("hr_api", __name__)
+SGT = ZoneInfo("Asia/Singapore")
 
 IN_PROGRESS_SECONDS = 120   # a 'received' event older than this is assumed to have crashed
 
@@ -263,62 +265,48 @@ def _resign(event, system):
     emp = _employee(username)
     _ordinary(emp, username)
     result = {"action": "resign", "employee_id": emp["id"], "username": username}
+    reason = event["reason"] or "HRMS resignation"
+    effective = date.fromisoformat(event["effective_date"]) if event["effective_date"] else datetime.now(SGT).date()
 
-    # 1) KILL SWITCH — before any workflow work, and never rolled back by a later failure.
-    result["kill_switch"] = _kill_switch(emp, event)
+    if effective > datetime.now(SGT).date():
+        # HRMS provides a last working DATE rather than a time. Apply the cut-off at
+        # the end of that Singapore business day; the common worker handles it.
+        effective_at = datetime.combine(effective, time(23, 59, 59), tzinfo=SGT).astimezone(timezone.utc)
+        offboarding.schedule(emp["id"], effective_at, reason, system)
+        result.update({"scheduled": True, "scheduled_offboard_at": effective_at.isoformat(),
+                       "effective_date": effective.isoformat()})
+        return result
 
-    # 2) Work that can no longer make sense is closed, so nobody can process it and re-activate
-    #    the leaver (a processed onboard/shift sets the employee active again).
-    result["closed_requests"] = _close_open_requests(emp, system, event)
-
-    # 3) The return workflow: one request takes back the laptop + account pair.
-    result["return_request"], result["return_note"] = _raise_return(emp, system, event)
+    executed = offboarding.execute(emp["id"], reason, system, trigger="hrms")
+    audit.record("access", "hr_kill_switch", target_type="employee", target_id=emp["id"],
+                 target_label=emp["username"], details={
+                     "event_id": event["event_id"], "previous_status": executed.get("previous_status"),
+                     "signed_out_everywhere": True, "keycloak_synced": executed.get("keycloak_synced"),
+                     "reason": event["reason"], "effective_date": event["effective_date"],
+                     "return_request_id": executed.get("return_request_id")})
+    result.update({
+        "kill_switch": {"status": "inactive", "previous_status": executed.get("previous_status"),
+                        "keycloak_synced": executed.get("keycloak_synced")},
+        "closed_requests": executed.get("closed_request_ids", []),
+        "return_request": executed.get("return_request_id"),
+        "return_note": executed.get("return_note"),
+    })
     return result
 
 
-def _kill_switch(emp, event):
-    previous = emp["status"]
-    db.query("UPDATE employees SET status='inactive' WHERE id=%s", (emp["id"],), fetch=None)
-    # push() also refuses every access token / service session issued before now (immediate, even
-    # with Keycloak down) and queues the Keycloak disable + sign-out for retry if it cannot be done.
-    keycloak_synced = sync.push(emp["id"], end_sessions=True)
-    audit.record("access", "hr_kill_switch", target_type="employee", target_id=emp["id"], target_label=emp["username"],
-                 details={"event_id": event["event_id"], "previous_status": previous,
-                          "signed_out_everywhere": True, "keycloak_synced": keycloak_synced,
-                          "reason": event["reason"], "effective_date": event["effective_date"]})
-    return {"status": "inactive", "previous_status": previous, "keycloak_synced": keycloak_synced}
+def _cancel_resignation(event, system):
+    username = event["employee"]["username"]
+    emp = _employee(username)
+    _ordinary(emp, username)
+    reason = event["reason"] or "HRMS resignation cancelled"
+    try:
+        offboarding.cancel_schedule(emp["id"], reason, system)
+    except offboarding.OffboardingError as exc:
+        raise HrReject(str(exc)) from exc
+    return {"action": "cancel_resignation", "employee_id": emp["id"],
+            "username": username, "schedule_cancelled": True,
+            "effective_date": event["effective_date"], "reason": reason}
 
 
-def _close_open_requests(emp, system, event):
-    rows = db.query("""SELECT id FROM requests WHERE target_employee_id=%s AND type <> 'return'
-                       AND status NOT IN ('completed','rejected') ORDER BY id""", (emp["id"],))
-    note = f"Closed automatically: employee resigned (HR event {event['event_id']})"
-    for r in rows:
-        db.query("UPDATE requests SET status='rejected', reject_reason=%s, updated_at=now() WHERE id=%s",
-                 (note, r["id"]), fetch=None)
-        add_event(r["id"], system["id"], "rejected", note)
-    return [r["id"] for r in rows]
-
-
-def _raise_return(emp, system, event):
-    # Already has one running (e.g. a manual offboard, or this event retried): do not duplicate.
-    open_return = db.query("""SELECT id FROM requests WHERE target_employee_id=%s AND type='return'
-                              AND status NOT IN ('completed','rejected') ORDER BY id LIMIT 1""", (emp["id"],), fetch="one")
-    if open_return:
-        return open_return["id"], "a return request was already open"
-    held = [r["service_id"] for r in db.query(
-        "SELECT service_id FROM employee_access WHERE employee_id=%s ORDER BY service_id", (emp["id"],))]
-    if not held:
-        return None, "no access held, so nothing to return"
-    # The account is the lower privilege: returning it takes the laptop with it and brings back
-    # BOTH assets, so it is the one request that covers everything the leaver holds.
-    account = service_by_type("account")
-    service_id = account["id"] if account and account["id"] in held else held[0]
-    rid, err = workflows.raise_return(system["id"], emp, service_id,
-                                      _why(event) + " — leaver: return laptop and account")
-    if err:
-        raise RuntimeError(f"could not raise the return request: {err}")
-    return rid, None
-
-
-HANDLERS = {"hire": _hire, "transfer": _transfer, "resign": _resign}
+HANDLERS = {"hire": _hire, "transfer": _transfer, "resign": _resign,
+            "cancel_resignation": _cancel_resignation}
