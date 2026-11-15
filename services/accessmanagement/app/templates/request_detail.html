@@ -18,6 +18,7 @@
     <div class="detail-row"><span class="detail-k">Requestor</span><span>{{ r.requestor_name }}</span></div>
     <div class="detail-row"><span class="detail-k">Requested for</span><span>{{ "On behalf of the employee" if r.on_behalf else "Self" }}</span></div>
     <div class="detail-row"><span class="detail-k">Status</span><span>{{ status_label(r.status) }}</span></div>
+    {% if r.type == 'grant' %}<div class="detail-row"><span class="detail-k">Access expires</span><span>{{ r.access_expires_at | dt if r.access_expires_at else "Ongoing" }}</span></div>{% endif %}
     <div class="detail-row"><span class="detail-k">Justification</span><span>{{ r.justification or "—" }}</span></div>
     <div class="detail-row"><span class="detail-k">Appointment</span><span>{{ r.appointment_at | dt }}</span></div>
     <div class="detail-row"><span class="detail-k">Asset</span><span>{{ r.asset_tag or "—" }}</span></div>

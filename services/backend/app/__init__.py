@@ -1,11 +1,11 @@
 """Backend application factory."""
 from flask import Flask
 
-from . import audit, db, document_privacy, passwords, sync
+from . import access_lifecycle, audit, db, document_privacy, offboarding, passwords, sync
 from .clients import authenticate_client
 from .api import (auth, reference, admin, quotas, requests as requests_api,
                   audit as audit_api, rotations, journey, hr, access_reviews, tracker,
-                  privacy_reviews)
+                  privacy_reviews, offboarding as offboarding_api)
 
 
 def create_app():
@@ -13,7 +13,7 @@ def create_app():
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # bound request bodies (documents are base64)
     app.before_request(authenticate_client)
     for module in (auth, reference, admin, quotas, requests_api, audit_api, rotations,
-                   journey, hr, access_reviews, tracker, privacy_reviews):
+                   journey, hr, access_reviews, tracker, privacy_reviews, offboarding_api):
         app.register_blueprint(module.bp)
 
     @app.after_request
@@ -37,3 +37,5 @@ def start_background():
     + the Mandatory Job Rotation due check + document privacy/retention."""
     sync.start_background()
     document_privacy.start_background()
+    access_lifecycle.start_background()
+    offboarding.start_background()

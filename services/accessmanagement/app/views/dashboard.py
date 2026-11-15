@@ -70,6 +70,8 @@ def _approver():
         mjr_tracked=[o for o in officers if o["state"] in ("rotation_planned", "shift_in_progress", "kept")],
         mjr_all=officers,
         departments=get_json("/api/departments", default=[]) if role == "director" else [],
+        offboarding_employees=[e for e in get_json("/api/employees", default=[])
+                               if e["role"] == "employee"] if role == "hr" else [],
     )
 
 
@@ -83,6 +85,8 @@ def _it_admin():
         quotas=get_json("/api/quotas", default=[]),
         quota_requests=get_json("/api/quota-requests", default=[]),
         department_quotas=get_json("/api/department-quotas", default=[]),
+        offboarding_employees=[e for e in get_json("/api/employees", default=[])
+                               if e["role"] == "employee"],
     )
 
 
@@ -102,6 +106,19 @@ def _provision_plan(req, employees_by_id, services_by_id, assets):
     return plan
 
 
+def _reused_assets(req, employees_by_id, services_by_id, assets):
+    """Assigned tags EUSS will retain when a re-grant happens before collection."""
+    target = employees_by_id.get(req["target_employee_id"])
+    if not target:
+        return []
+    needed = {KIND_OF[services_by_id[sid]["resource_type"]]
+              for sid in target.get("access", []) if sid in services_by_id
+              and services_by_id[sid]["resource_type"] in KIND_OF}
+    return [a for a in assets if a["assigned_to"] == req["target_employee_id"]
+            and a["status"] == "assigned" and a["kind"] in needed
+            and not a.get("collection_pending")]
+
+
 def _euss():
     queue = get_json("/api/requests/queue", default=[])
     employees = get_json("/api/employees", default=[])
@@ -117,6 +134,7 @@ def _euss():
         else:
             r = dict(r)
             r["plan"] = _provision_plan(r, employees_by_id, services_by_id, assets)
+            r["reused_assets"] = _reused_assets(r, employees_by_id, services_by_id, assets)
             provisions.append(r)
     by_appt = lambda r: r.get("appointment_at") or "9999"   # noqa: E731 — soonest appointment first
     board = get_json("/api/euss/slots", params={"days": 7}, default={}) or {}
@@ -127,6 +145,7 @@ def _euss():
     return render_template(
         "dashboard/euss.html",
         provisions=sorted(provisions, key=by_appt), returns=sorted(returns, key=by_appt), assets=assets,
+        collection_tasks=get_json("/api/asset-collection-tasks", params={"status": "pending"}, default=[]),
         slot_board=board,
         history=get_json("/api/requests/history", default=[]),
     )

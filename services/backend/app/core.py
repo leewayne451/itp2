@@ -269,26 +269,40 @@ def revoke_with_dependents(emp_id, service_id):
     return removed
 
 
-def _audit_entitlement(action, emp_id, service_id):
+def _audit_entitlement(action, emp_id, service_id, details=None, actor=None):
     who = db.query("SELECT username FROM employees WHERE id=%s", (emp_id,), fetch="one")
     svc = db.query("SELECT key, name FROM services WHERE id=%s", (service_id,), fetch="one")
-    audit.record("access", action, target_type="employee", target_id=emp_id,
+    audit.record("access", action, actor=actor, target_type="employee", target_id=emp_id,
                  target_label=who and who["username"],
-                 details={"service": svc and svc["name"], "service_key": svc and svc["key"]})
+                 details={"service": svc and svc["name"], "service_key": svc and svc["key"],
+                          **(details or {})})
 
 
-def grant_access(emp_id, service_id):
-    row = db.query("""INSERT INTO employee_access (employee_id, service_id) VALUES (%s,%s)
-                      ON CONFLICT DO NOTHING RETURNING employee_id""", (emp_id, service_id), fetch="one")
+def grant_access(emp_id, service_id, expires_at=None, request_id=None):
+    row = db.query("""INSERT INTO employee_access (employee_id, service_id, expires_at) VALUES (%s,%s,%s)
+                      ON CONFLICT DO NOTHING RETURNING employee_id""",
+                   (emp_id, service_id, expires_at), fetch="one")
     if row:   # only a real change is an entitlement event
-        _audit_entitlement("entitlement_granted", emp_id, service_id)
+        _audit_entitlement("entitlement_granted", emp_id, service_id,
+                           {"expires_at": expires_at.isoformat() if expires_at else None,
+                            "request_id": request_id})
+    return bool(row)
 
 
-def revoke_access(emp_id, service_id):
-    row = db.query("DELETE FROM employee_access WHERE employee_id=%s AND service_id=%s RETURNING employee_id",
-                   (emp_id, service_id), fetch="one")
+def revoke_access(emp_id, service_id, *, audit_action="entitlement_revoked",
+                  audit_details=None, actor=None, due_at=None):
+    sql = "DELETE FROM employee_access WHERE employee_id=%s AND service_id=%s"
+    params = [emp_id, service_id]
+    if due_at is not None:
+        # The worker may have read an entitlement just as somebody extends or
+        # manually revokes it. Delete only the exact due version it observed.
+        sql += " AND expires_at=%s AND expires_at<=now()"
+        params.append(due_at)
+    sql += " RETURNING employee_id"
+    row = db.query(sql, tuple(params), fetch="one")
     if row:
-        _audit_entitlement("entitlement_revoked", emp_id, service_id)
+        _audit_entitlement(audit_action, emp_id, service_id, audit_details, actor=actor)
+    return bool(row)
 
 
 def service_by_type(rtype):
@@ -457,6 +471,7 @@ def request_dict(row, with_events=False):
         "source_department_name": row["source_department_name"],
         "on_behalf": row["on_behalf"],
         "justification": row["justification"], "reject_reason": row["reject_reason"],
+        "access_expires_at": row["access_expires_at"].isoformat() if row.get("access_expires_at") else None,
         "appointment_at": row["appointment_at"].isoformat() if row["appointment_at"] else None,
         "asset_tag": row["asset_tag"],
         "created_at": row["created_at"].isoformat(), "updated_at": row["updated_at"].isoformat(),

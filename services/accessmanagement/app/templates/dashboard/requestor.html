@@ -114,6 +114,10 @@
           {% for s in services %}<option value="{{ s.id }}" data-service-id="{{ s.id }}">{{ s.name }}</option>{% endfor %}
         </select>
       </label>
+      <label>Access ends (optional, Singapore time)
+        <input type="datetime-local" name="access_expires_at">
+      </label>
+      <p class="small muted">Leave blank for ongoing access. At this time, digital access is revoked automatically; EUSS must still collect any physical asset.</p>
       {{ requesting_for() }}
       {{ doc_and_submit("Submit request") }}
     </form>

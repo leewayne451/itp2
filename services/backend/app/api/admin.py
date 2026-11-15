@@ -3,7 +3,7 @@ from datetime import date
 
 from flask import Blueprint, request, jsonify, g
 
-from .. import audit, db, keycloak, passwords, sync
+from .. import access_lifecycle, audit, db, keycloak, passwords, sync
 from ..auth import require_role
 from ..config import MFA_REQUIRED_ROLES
 from ..core import VALID_ROLES
@@ -92,9 +92,11 @@ def update_employee(emp_id):
         return jsonify(error="Use POST /api/employees/<id>/password/reset to reset a password"), 400
     if "status" in body and body["status"] not in ADMIN_SETTABLE_STATUS:
         return jsonify(error=f"status must be one of {', '.join(ADMIN_SETTABLE_STATUS)}"), 400
-    before = db.query("SELECT username, full_name, email, role, status, department_id, "
+    before = db.query("SELECT username, full_name, email, role, status, department_id, offboarded_at, "
                       "to_char(department_since, 'YYYY-MM-DD') AS department_since FROM employees WHERE id=%s",
                       (emp_id,), fetch="one")
+    if body.get("status") == "active" and before.get("offboarded_at"):
+        return jsonify(error="An offboarded employee cannot be reactivated with the status toggle"), 409
     fields, values = [], []
     for col in ("full_name", "email", "department_id", "status"):
         if col in body:
@@ -310,12 +312,32 @@ def _service_names(ids):
 def list_assets():
     return jsonify(db.query("""
         SELECT a.id, a.asset_tag, a.kind, a.status, a.assigned_to,
-               e.full_name AS assigned_name, d.name AS assigned_dept
+               e.full_name AS assigned_name, d.name AS assigned_dept,
+               EXISTS (SELECT 1 FROM asset_collection_tasks t
+                        WHERE t.asset_id=a.id AND t.status='pending') AS collection_pending
         FROM assets a
         LEFT JOIN employees e ON e.id = a.assigned_to
         LEFT JOIN departments d ON d.id = e.department_id
         ORDER BY a.kind, a.asset_tag
     """))
+
+
+@bp.get("/api/asset-collection-tasks")
+@require_role("euss", "it_admin", "admin")
+def list_asset_collection_tasks():
+    status = request.args.get("status", "pending")
+    if status not in ("pending", "collected", "cancelled"):
+        return jsonify(error="status must be pending, collected or cancelled"), 400
+    return jsonify(access_lifecycle.collection_tasks(status))
+
+
+@bp.post("/api/asset-collection-tasks/<int:task_id>/collect")
+@require_role("euss")
+def complete_asset_collection(task_id):
+    task, error = access_lifecycle.collect_asset(task_id, g.user)
+    if error:
+        return jsonify(error=error), 409
+    return jsonify(ok=True, task_id=task_id, asset_tag=task["asset_tag"])
 
 
 @bp.get("/api/assets/<int:asset_id>/history")

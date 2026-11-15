@@ -38,12 +38,16 @@
         <tr>
           <td>{{ e.full_name }}</td>
           <td><code>{{ e.username }}</code></td>
-          <td class="small">{% for sid in e.access %}{{ (services|selectattr('id','equalto',sid)|first).name }}{{ ", " if not loop.last }}{% else %}—{% endfor %}</td>
+          <td class="small">{% for a in e.access_details %}{% set svc = services|selectattr('id','equalto',a.service_id)|first %}{{ svc.name }}{% if a.expires_at %}<div class="muted">expires {{ a.expires_at|dt }}</div>{% endif %}{{ ", " if not loop.last }}{% else %}—{% endfor %}</td>
           <td>
+            {% if e.offboarded_at %}
+              <span class="status-pill inactive" title="Offboarded employees cannot be reactivated with this toggle">inactive</span>
+            {% else %}
             <form method="post" action="{{ url_for('admin.update_employee', emp_id=e.id) }}" class="inline-form">
               <input type="hidden" name="status" value="{{ 'inactive' if e.status == 'active' else 'active' }}">
               <button class="status-pill {{ e.status }}" type="submit" title="Toggle">{{ e.status }}</button>
             </form>
+            {% endif %}
           </td>
           <td>
             {% if e.mfa_enabled %}

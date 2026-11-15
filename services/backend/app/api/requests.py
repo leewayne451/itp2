@@ -1,7 +1,10 @@
 """The request lifecycle: creation, listing, and every workflow transition."""
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from flask import Blueprint, request, jsonify, g
 
-from .. import audit, db, document_privacy, rotation, scheduling, sync
+from .. import access_lifecycle, audit, db, document_privacy, rotation, scheduling, sync
 from ..auth import require_auth, require_role
 from ..core import (
     STATE_ROLE, APPROVAL_NEXT, STAFF_ROLES, KIND_OF,
@@ -13,6 +16,30 @@ from ..core import (
 )
 
 bp = Blueprint("requests_api", __name__)
+SGT = ZoneInfo("Asia/Singapore")
+
+
+def parse_access_expiry(value):
+    """Parse a browser datetime-local or ISO timestamp as an absolute UTC time.
+
+    A naive value comes from the Singapore console and is therefore interpreted
+    as Singapore time.  Keeping this authoritative check in the backend also
+    protects API callers that bypass the form.
+    """
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Access expiry must be a date and time")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Access expiry must be a valid date and time") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SGT)
+    parsed = parsed.astimezone(timezone.utc)
+    if parsed <= datetime.now(timezone.utc):
+        raise ValueError("Access expiry must be in the future")
+    return parsed
 
 
 # --------------------------------------------------------------------------- #
@@ -47,6 +74,8 @@ def create_request():
         return jsonify(error="Target employee not found"), 404
     if target["role"] != "employee":
         return jsonify(error="Requests can only target ordinary employees"), 400
+    if target["status"] == "inactive":
+        return jsonify(error="This employee is inactive and cannot receive new workflow requests"), 409
 
     if rtype == "onboard":
         return _create_onboard(target, on_behalf, justification, documents, body)
@@ -128,10 +157,18 @@ def _create_grant_return(rtype, target, on_behalf, justification, documents, bod
     if db.query("SELECT 1 FROM requests WHERE target_employee_id=%s AND service_id=%s AND type=%s "
                 "AND status NOT IN ('completed','rejected')", (target["id"], service_id, rtype), fetch="one"):
         return jsonify(error="An open request of this type already exists for that employee/service"), 409
+    try:
+        access_expires_at = parse_access_expiry(body.get("access_expires_at"))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if rtype != "grant" and access_expires_at is not None:
+        return jsonify(error="Only Grant requests may have an access expiry"), 400
     row = db.query(
-        """INSERT INTO requests (type, requestor_id, target_employee_id, service_id, on_behalf, justification, status)
-           VALUES (%s,%s,%s,%s,%s,%s,'pending_hr') RETURNING id""",
-        (rtype, g.user["id"], target["id"], service_id, on_behalf, justification), fetch="one")
+        """INSERT INTO requests (type, requestor_id, target_employee_id, service_id, on_behalf,
+                                 justification, access_expires_at, status)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,'pending_hr') RETURNING id""",
+        (rtype, g.user["id"], target["id"], service_id, on_behalf, justification,
+         access_expires_at), fetch="one")
     attach_documents(row["id"], documents)
     add_event(row["id"], g.user["id"], "submitted",
               "Return (offboard) request submitted" if rtype == "return" else "Access request submitted")
@@ -360,6 +397,8 @@ def _processed(rid, note):
 
 def _process_grant(req):
     target = req["target_employee_id"]
+    if req.get("access_expires_at") and req["access_expires_at"] <= datetime.now(timezone.utc):
+        return jsonify(error="This requested access expiry has already passed. Reject this request and raise a new one."), 409
     svc = db.query("SELECT * FROM services WHERE id=%s", (req["service_id"],), fetch="one")
     account = service_by_type("account")
     to_grant = []
@@ -374,7 +413,8 @@ def _process_grant(req):
     if over and not override_reason:
         return jsonify(requires_override=True, warning="Quota exceeded for: " + ", ".join(over)), 409
     for s in to_grant:
-        grant_access(target, s["id"])
+        grant_access(target, s["id"], expires_at=req.get("access_expires_at"), request_id=req["id"])
+    access_lifecycle.cancel_resolved_collections(target, actor=g.user)
     set_status(req["id"], "pending_appointment")
     note = "Access provisioned" + (" (laptop + account)" if svc["resource_type"] == "laptop" else "")
     if over:
@@ -410,6 +450,7 @@ def _process_into_department(req, verb):
     sync.push(target)                            # Keycloak: account enabled again
     for sid in svc_ids:
         grant_access(target, sid)
+    access_lifecycle.cancel_resolved_collections(target, actor=g.user)
 
     set_status(req["id"], "pending_appointment")
     note = (f"Transferred to {dept['name']}; services reset to department template ({service_names(svc_ids)})"

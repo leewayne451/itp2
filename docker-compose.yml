@@ -99,6 +99,9 @@ services:
       DOCUMENT_PURGE_INTERVAL_SECONDS: ${DOCUMENT_PURGE_INTERVAL_SECONDS:-30}
       DOCUMENT_OCR_DPI: ${DOCUMENT_OCR_DPI:-200}
       DOCUMENT_OCR_MIN_CONFIDENCE: ${DOCUMENT_OCR_MIN_CONFIDENCE:-60}
+      # Time-bound grants: how often due entitlements are revoked.
+      ACCESS_EXPIRY_INTERVAL_SECONDS: ${ACCESS_EXPIRY_INTERVAL_SECONDS:-10}
+      OFFBOARDING_INTERVAL_SECONDS: ${OFFBOARDING_INTERVAL_SECONDS:-10}
     depends_on:
       postgres:
         condition: service_healthy

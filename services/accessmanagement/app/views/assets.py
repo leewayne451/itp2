@@ -10,6 +10,15 @@ from ..backend_client import call, get_json, error_of
 bp = Blueprint("assets", __name__)
 
 
+@bp.post("/assets/collection-tasks/<int:task_id>/collect")
+@role_required("euss")
+def collect(task_id):
+    resp = call("POST", f"/api/asset-collection-tasks/{task_id}/collect", json={})
+    flash("Asset collection confirmed; the tag is available again." if resp.ok else error_of(resp),
+          "ok" if resp.ok else "error")
+    return redirect(url_for("dashboard.index"))
+
+
 @bp.get("/assets/<int:asset_id>/history")
 @role_required("euss", "admin")
 def history(asset_id):

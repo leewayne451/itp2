@@ -1,0 +1,49 @@
+<section class="panel" id="offboarding">
+  <div class="panel-head"><h2>Leaver offboarding</h2></div>
+  <p class="muted small">Schedule a cut-off in Singapore time. IT Admin may also use Emergency offboard for immediate removal. Both actions deactivate the employee, revoke all digital access, end sessions and raise EUSS collection tasks. A reason is mandatory.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Employee</th><th>Department</th><th>Status</th><th>Scheduled cut-off</th>{% if current_user.role == 'it_admin' %}<th>Emergency action</th>{% endif %}</tr></thead>
+      <tbody>
+        {% if not offboarding_employees %}<tr><td colspan="{{ 5 if current_user.role == 'it_admin' else 4 }}" class="muted">No ordinary employees.</td></tr>{% endif %}
+        {% for e in offboarding_employees %}
+        <tr>
+          <td>{{ e.full_name }}<div class="small muted">{{ e.username }}</div></td>
+          <td>{{ e.department_name or "—" }}</td>
+          <td>
+            <span class="pill {{ 'ok' if e.status=='active' else 'wait' if e.status=='suspended' else 'bad' }}">{{ e.status }}</span>
+            {% if e.offboarded_at %}<div class="small muted">Offboarded {{ e.offboarded_at|dt }}</div>{% endif %}
+          </td>
+          <td>
+            {% if e.scheduled_offboard_at and not e.offboarded_at %}
+              <strong>{{ e.scheduled_offboard_at|dt }}</strong>
+              <div class="small muted">{{ e.scheduled_offboard_reason }}</div>
+              <form method="post" action="{{ url_for('offboarding.cancel', emp_id=e.id) }}" class="inline-form">
+                <input name="reason" class="reason-in" placeholder="cancellation reason" required minlength="3">
+                <button class="btn-sm" type="submit">Cancel schedule</button>
+              </form>
+            {% elif e.status == 'active' %}
+              <form method="post" action="{{ url_for('offboarding.schedule', emp_id=e.id) }}" class="stack-form">
+                <input type="datetime-local" name="effective_at" required>
+                <input name="reason" class="reason-in wide" placeholder="reason" required minlength="3">
+                <button class="btn-sm" type="submit">Schedule</button>
+              </form>
+            {% else %}—{% endif %}
+          </td>
+          {% if current_user.role == 'it_admin' %}
+          <td>
+            {% if not e.offboarded_at and e.status != 'inactive' %}
+            <form method="post" action="{{ url_for('offboarding.emergency', emp_id=e.id) }}" class="stack-form"
+                  onsubmit="return confirm('Immediately deactivate {{ e.username }} and revoke all access?');">
+              <input name="reason" class="reason-in wide" placeholder="emergency reason" required minlength="3">
+              <button class="btn-sm danger" type="submit">Emergency offboard</button>
+            </form>
+            {% else %}<span class="small muted">Completed</span>{% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>

@@ -33,6 +33,12 @@ API_AUDIENCE = "servicejourney-api"
 API_AUTHORIZED_PARTIES = {"console"}
 STAFF_GROUP = "staff"            # Keycloak group whose members must use TOTP
 SYNC_INTERVAL_SECONDS = 10       # retry Keycloak sync / pull Keycloak events this often
+ACCESS_EXPIRY_INTERVAL_SECONDS = max(
+    1, int(os.environ.get("ACCESS_EXPIRY_INTERVAL_SECONDS", "10"))
+)
+OFFBOARDING_INTERVAL_SECONDS = max(
+    1, int(os.environ.get("OFFBOARDING_INTERVAL_SECONDS", "10"))
+)
 
 # --------------------------------------------------------------------------- #
 # First-party API clients (service-to-service authentication)

@@ -249,6 +249,12 @@ def close_booking(rid):
              (rid,), fetch=None)
 
 
+def cancel_booking(rid):
+    """Close a booking without consuming the place (for a rejected/cancelled request)."""
+    db.query("""UPDATE euss_bookings SET status='cancelled', ended_at=now()
+                 WHERE request_id=%s AND status='booked'""", (rid,), fetch=None)
+
+
 def set_slot_status(slot_id, status, actor, reason=None):
     """EUSS blocks or re-opens a slot. Blocking moves everyone booked in it to the next
     free slot (and tells them); a request with no free slot left goes back to the

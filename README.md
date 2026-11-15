@@ -777,6 +777,45 @@ Reconciliation refreshes changed evidence and returns unexpected drift to the
 Director. Changes caused by an approved revoke or its asset collection retain the
 original review decision.
 
+## Time-bound access grants
+
+A Requestor may give a **Grant** an optional end date (entered in Singapore time). The
+approved workflow is unchanged. When IT processes the request, the expiry is attached to
+every entitlement newly created by that Grant, including a newly required Account for a
+Laptop. The backend checks due entitlements every 10 seconds and removes them without a
+manual return request.
+
+Expiry removes **digital access immediately** and records `entitlement_expired` in the
+tamper-evident audit trail. It does not falsely claim that equipment was returned:
+instead, EUSS receives a collection task for each assigned tag that is no longer needed.
+The tag stays assigned until EUSS confirms physical collection. If access is re-granted
+before collection, the task is cancelled and the existing tag is reused; if EUSS has
+already collected it, a later grant requires a new available tag. The existing privilege
+hierarchy remains in force: an expired Laptop leaves an independently held Account,
+while an expired Account also removes its dependent Laptop access. Blank expiry means
+ongoing access.
+
+For a quick demo, raise a Grant for a service the employee does not hold, choose an end
+time several minutes ahead, complete the approvals, and sign the employee into the
+service. After the deadline plus one worker interval, the open service is refused on its
+next authorization check. Configure the poll interval with
+`ACCESS_EXPIRY_INTERVAL_SECONDS` (default `10`).
+
+## Scheduled and emergency leaver cut-off
+
+HR and IT Admin have a **Leaver offboarding** panel and may schedule an employee's
+cut-off in Singapore time. Only IT Admin may use **Emergency offboard** for immediate
+removal; both actions require a reason. At execution the backend marks the employee inactive first, advances the local
+token cut-off and requests Keycloak logout, revokes every entitlement, closes conflicting
+open requests and raises EUSS collection tasks for assigned physical assets. The local
+inactive status and token cut-off take effect even when Keycloak is unavailable; its
+disable/logout remains queued for retry.
+
+Scheduled cut-offs are checked every `OFFBOARDING_INTERVAL_SECONDS` (default `10`). They
+can be cancelled before execution. Completed offboarding is idempotent, cannot be undone
+through the Admin status toggle, and records the actor, trigger, reason, removed access,
+closed requests, session action and collection tasks in the tamper-evident audit trail.
+
 ## Personal-data document protection and retention
 
 Supporting PDFs are quarantined and scanned by the backend before an approver can

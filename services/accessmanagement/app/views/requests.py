@@ -57,6 +57,8 @@ def create():
         "justification": request.form.get("justification", "").strip(),
         "documents": documents,
     }
+    if rtype == "grant":
+        payload["access_expires_at"] = request.form.get("access_expires_at", "").strip() or None
     if rtype in ("onboard", "shift"):
         payload["department_id"] = int(request.form["department_id"]) if request.form.get("department_id") else None
     if rtype == "shift" and request.form.get("rotation_decision_id"):   # MJR (CHANGE 006)

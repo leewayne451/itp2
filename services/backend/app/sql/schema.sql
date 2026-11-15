@@ -46,17 +46,32 @@ CREATE TABLE IF NOT EXISTS employees (
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'employee';
 -- Contact address used by the email-notification service.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS email TEXT;
+-- Direct/scheduled leaver cut-off. The scheduled values remain as evidence after
+-- execution; offboarded_at makes the operation idempotent.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS scheduled_offboard_at TIMESTAMPTZ;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS scheduled_offboard_reason TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS scheduled_offboard_by_id INTEGER REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS offboarded_at TIMESTAMPTZ;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS offboarded_by_id INTEGER REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS offboard_reason TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS offboard_trigger TEXT;
+CREATE INDEX IF NOT EXISTS employees_scheduled_offboard
+    ON employees (scheduled_offboard_at) WHERE offboarded_at IS NULL AND scheduled_offboard_at IS NOT NULL;
 
 -- The EFFECTIVE access of an employee. Source of truth the service dockers check.
 -- Now only mutated by the workflow (IT 'process' grants, EUSS 'retrieve' revokes).
 CREATE TABLE IF NOT EXISTS employee_access (
     employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
     service_id  INTEGER NOT NULL REFERENCES services(id)  ON DELETE CASCADE,
+    expires_at  TIMESTAMPTZ,
     PRIMARY KEY (employee_id, service_id)
 );
 -- There is no per-resource "suspended" state: an employee either holds a usable
 -- laptop+account pair or holds nothing. (Dropped from older databases.)
 ALTER TABLE employee_access DROP COLUMN IF EXISTS suspended;
+ALTER TABLE employee_access ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS employee_access_expiry
+    ON employee_access (expires_at) WHERE expires_at IS NOT NULL;
 
 -- Physical assets provisioned/retrieved by EUSS ("SN Assets").
 CREATE TABLE IF NOT EXISTS assets (
@@ -93,6 +108,9 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS target_department_id INTEGER REFER
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS source_department_id INTEGER REFERENCES departments(id);
 -- Whether the requestor is acting for themselves or on behalf of someone else.
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS on_behalf BOOLEAN NOT NULL DEFAULT FALSE;
+-- Optional expiry requested for a one-off Grant. It becomes effective on the
+-- entitlement only when IT processes the approved request.
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ;
 
 -- Supporting documents a requestor may attach to a request (stored inline as
 -- base64 for this POC — no separate file store).
@@ -176,6 +194,27 @@ CREATE TABLE IF NOT EXISTS asset_events (
     request_id  INTEGER REFERENCES requests(id) ON DELETE SET NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Digital access can expire before EUSS physically receives the equipment.
+-- Keep that hand-off explicit: an assigned asset remains in the employee's
+-- custody until EUSS confirms collection against one of these tasks.
+CREATE TABLE IF NOT EXISTS asset_collection_tasks (
+    id                  SERIAL PRIMARY KEY,
+    asset_id            INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    employee_id         INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    trigger_service_id  INTEGER REFERENCES services(id) ON DELETE SET NULL,
+    status              TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','collected','cancelled')),
+    reason              TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at        TIMESTAMPTZ,
+    completed_by_id     INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    cancellation_reason TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS asset_collection_one_pending
+    ON asset_collection_tasks (asset_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS asset_collection_queue
+    ON asset_collection_tasks (status, created_at, id);
 
 -- Immutable audit trail: every action taken on a request, by whom and when.
 CREATE TABLE IF NOT EXISTS request_events (
@@ -492,6 +531,11 @@ CREATE TABLE IF NOT EXISTS euss_bookings (
     CONSTRAINT euss_booking_status CHECK (status IN ('booked', 'moved', 'done')),
     CONSTRAINT euss_booking_method CHECK (method IN ('auto', 'chosen', 'rematched'))
 );
+-- A leaver cut-off can close a request before its appointment; retain that
+-- booking as evidence while returning the place to the available pool.
+ALTER TABLE euss_bookings DROP CONSTRAINT IF EXISTS euss_booking_status;
+ALTER TABLE euss_bookings ADD CONSTRAINT euss_booking_status
+    CHECK (status IN ('booked', 'moved', 'done', 'cancelled'));
 CREATE UNIQUE INDEX IF NOT EXISTS euss_bookings_one_live
     ON euss_bookings (request_id) WHERE status = 'booked';
 CREATE INDEX IF NOT EXISTS euss_bookings_slot ON euss_bookings (slot_id) WHERE status = 'booked';

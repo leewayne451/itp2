@@ -30,13 +30,22 @@ def list_departments():
 def list_employees():
     rows = db.query("""
         SELECT e.id, e.username, e.full_name, e.email, e.role, e.status, e.department_id, d.name AS department_name,
-               e.keycloak_id, to_char(e.department_since, 'YYYY-MM-DD') AS department_since
+               e.keycloak_id, to_char(e.department_since, 'YYYY-MM-DD') AS department_since,
+               e.scheduled_offboard_at,e.scheduled_offboard_reason,e.offboarded_at,
+               e.offboard_reason,e.offboard_trigger
         FROM employees e LEFT JOIN departments d ON d.id = e.department_id
         ORDER BY e.full_name
     """)
     for r in rows:
-        acc = db.query("SELECT service_id FROM employee_access WHERE employee_id=%s", (r["id"],))
+        acc = db.query("SELECT service_id,expires_at FROM employee_access WHERE employee_id=%s ORDER BY service_id",
+                       (r["id"],))
         r["access"] = [a["service_id"] for a in acc]
+        r["access_details"] = [{"service_id": a["service_id"],
+                                "expires_at": a["expires_at"].isoformat() if a["expires_at"] else None}
+                               for a in acc]
+        for field in ("scheduled_offboard_at", "offboarded_at"):
+            if r.get(field):
+                r[field] = r[field].isoformat()
         kc_id = r.pop("keycloak_id", None)
         if g.user["role"] == "admin":   # two-factor status (from Keycloak) is only shown to administrators
             r["mfa_enabled"] = _has_otp(kc_id)

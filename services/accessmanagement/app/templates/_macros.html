@@ -1,11 +1,11 @@
 {# Reusable request table. `extra_col` optionally renders an actions cell per row. #}
 {% macro requests_table(rows, show_requestor=true, show_reason=false) %}
-{% set cols = 6 + (1 if show_requestor else 0) + (1 if show_reason else 0) %}
+{% set cols = 7 + (1 if show_requestor else 0) + (1 if show_reason else 0) %}
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
-        <th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th>
+        <th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th><th>Expires</th>
         {% if show_requestor %}<th>Requestor</th>{% endif %}
         {% if show_reason %}<th>Reason given</th>{% endif %}
         <th>Status</th><th></th>
@@ -21,6 +21,7 @@
         <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
         <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
         <td>{{ req_resource(r) }}</td>
+        <td class="small">{% if r.type == 'grant' %}{{ r.access_expires_at | dt if r.access_expires_at else "Ongoing" }}{% else %}—{% endif %}</td>
         {% if show_requestor %}
           <td>{{ r.requestor_name }}<div class="small muted">{{ behalf_label(r) }}</div></td>
         {% endif %}
