@@ -17,7 +17,7 @@
   <button class="primary" type="submit">{{ label }}</button>
 {% endmacro %}
 
-<section class="panel">
+<section class="panel" id="appointments-to-book">
   <div class="panel-head"><h2>① Appointments to book</h2></div>
   <p class="muted small">EUSS appointments are booked automatically when IT finishes a request. These are the
     ones that could not be: no EUSS slot was free at the time. Book the suggested slot, or pick another one.</p>
@@ -97,7 +97,7 @@
 
 <div class="two-col">
   {# ---- GRANT ---- #}
-  <section class="panel">
+  <section class="panel" id="grant-request">
     <div class="panel-head"><h2>Raise access request</h2></div>
     <p class="muted small">Give an existing employee one more service.</p>
     <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form service-form" data-mode="grant">
@@ -120,7 +120,7 @@
   </section>
 
   {# ---- RETURN ---- #}
-  <section class="panel">
+  <section class="panel" id="return-request">
     <div class="panel-head"><h2>Raise return request</h2></div>
     <p class="muted small">Offboard a service the employee currently holds.</p>
     <form method="post" action="{{ url_for('requests.create') }}" enctype="multipart/form-data" class="stack-form service-form" data-mode="return">
@@ -145,7 +145,7 @@
 
 <div class="two-col">
   {# ---- ONBOARD ---- #}
-  <section class="panel">
+  <section class="panel" id="onboard-request">
     <div class="panel-head"><h2>Onboard new employee</h2></div>
     <p class="muted small">For employees not yet in any department. Grants that department's services.</p>
     {% if not unonboarded %}<p class="muted small">No un-onboarded employees right now.</p>{% endif %}

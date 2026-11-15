@@ -2,19 +2,20 @@
 from datetime import timedelta
 from urllib.parse import urlsplit
 
-from flask import Flask, session, redirect, url_for, request, abort, flash
+from flask import Flask, session, redirect, url_for, request, abort, flash, jsonify
 
 from . import config, labels
 from .backend_client import AuthExpired
 from .views import (auth, dashboard, requests as req_views, admin, quotas, assets,
                     security, audit, rotations, journey, access_reviews, tracker,
-                    privacy_reviews)
+                    privacy_reviews, chatbot)
 
 
 def create_app():
     app = Flask(__name__)
     app.secret_key = config.SECRET_KEY
     app.config["BACKEND_URL"] = config.BACKEND_URL
+    app.config["CHATBOT_PREVIEW_ENABLED"] = config.CHATBOT_PREVIEW_ENABLED
     app.config["SESSION_COOKIE_NAME"] = config.SESSION_COOKIE_NAME
     app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # cap document uploads at 8 MB
     # Now that everything is served over TLS, keep the session cookie off any
@@ -56,7 +57,7 @@ def create_app():
         return resp
 
     for module in (auth, dashboard, req_views, admin, quotas, assets, security,
-                   audit, rotations, journey, access_reviews, tracker, privacy_reviews):
+                   audit, rotations, journey, access_reviews, tracker, privacy_reviews, chatbot):
         app.register_blueprint(module.bp)
 
     labels.register(app)
@@ -66,6 +67,8 @@ def create_app():
         from . import token_store
         token_store.drop(session.get("handle"))
         session.clear()
+        if request.blueprint == "chatbot":
+            return jsonify(error="Your session has ended. Please sign in again."), 401
         flash(f"{e.reason or 'Your session has ended'}. Please sign in again.", "error")
         return redirect(url_for("auth.login"))
 

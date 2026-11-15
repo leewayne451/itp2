@@ -149,6 +149,46 @@ def my_requests():
     return jsonify([request_dict(r) for r in rows])
 
 
+def _my_request_statuses(user_id, request_id=None):
+    from ..core import REQ_SELECT
+
+    sql = REQ_SELECT + " WHERE (r.requestor_id = %s OR r.target_employee_id = %s)"
+    params = [user_id, user_id]
+    if request_id is not None:
+        sql += " AND r.id = %s"
+        params.append(request_id)
+    sql += " ORDER BY r.updated_at DESC"
+    if request_id is None:
+        sql += " LIMIT 100"
+    rows = db.query(sql, tuple(params))
+    return [{
+        "id": row["id"],
+        "type": row["type"],
+        "status": row["status"],
+        "target_name": row["target_name"],
+        "service_name": row["service_name"],
+        "target_department_name": row["target_department_name"],
+        "new_department_name": row["new_department_name"],
+        "source_department_name": row["source_department_name"],
+        "updated_at": row["updated_at"].isoformat(),
+    } for row in rows]
+
+
+@bp.get("/api/requests/my-status")
+@require_auth
+def my_request_status():
+    raw_request_id = request.args.get("request_id")
+    request_id = None
+    if raw_request_id is not None:
+        try:
+            request_id = int(raw_request_id)
+        except ValueError:
+            return jsonify(error="request_id must be a positive integer"), 400
+        if request_id < 1:
+            return jsonify(error="request_id must be a positive integer"), 400
+    return jsonify(_my_request_statuses(g.user["id"], request_id))
+
+
 @bp.get("/api/requests/queue")
 @require_auth
 def my_queue():

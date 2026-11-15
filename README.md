@@ -23,7 +23,7 @@ services, and signing out of one signs out of all.
 | `keycloak` | *(official image `quay.io/keycloak/keycloak:26.4.2`)* + [`keycloak/`](keycloak) | 8443 | **Single sign-on** identity provider: sign-in pages, passwords, TOTP, lock-out, sessions, forgot password |
 | `keycloak-db` | *(official image)* | — | Keycloak's own database |
 | `backend` | [`services/backend`](services/backend) | 5000 | REST API + source of truth + workflow engine |
-| `accessmanagement` | [`services/accessmanagement`](services/accessmanagement) | 8080 | Role-aware workflow console |
+| `accessmanagement` | [`services/accessmanagement`](services/accessmanagement) | 8080; 8180 (local preview) | Role-aware workflow console |
 | `service1` | [`services/service1`](services/service1) | 8081 | **Personal Laptop** resource (placeholder service) |
 | `service2` | [`services/service2`](services/service2) | 8082 | **Account** resource (placeholder service) |
 | `email` | [`services/email`](services/email) | 8090 | Notification service + **mailbox** web page (POC stand-in for real mail); also receives Keycloak's e-mails (SMTP, internal port 1025) |
@@ -111,6 +111,23 @@ Authenticator (or any TOTP app) ready (see [Single sign-on](#single-sign-on-keyc
 | `alice`, `bob` | Employee | Seeded **with a laptop + account** (real asset tags) |
 | `charlie`, `erin`, `frank`, `grace`, `henry`, `ivy`, `jack` | Employee | In a department, **no resources yet** — targets for access requests |
 | `dave`, `kate`, `liam` | Employee | **No department** — used to demo the **onboard** flow |
+
+## ServiceJourney chat assistant
+
+After signing in, use **Ask assistant** from any console page to check request statuses
+linked to your account, get guidance on grants / onboarding / returns, or jump to the
+existing Requestor form. The assistant uses the signed-in user's backend token; the
+status endpoint returns only requests they submitted or that are about them. It does
+not approve requests or revoke access directly: the existing approval workflow remains
+in control.
+
+The signed-in assistant handles common workflow intents locally and makes no external AI
+calls. No MND HR policy documents are included, so MND-specific policy questions are not
+answered as fact. The assistant can demonstrate mock retrieval against fictional ExampleCo
+policy snippets, clearly labeled as fictional and not official guidance. The local-only preview at
+<https://localhost:8180/preview> additionally demonstrates mock document retrieval using
+fictional ExampleCo policy snippets. It is not a real AI model and the sample policies are
+not official ServiceJourney or MND guidance.
 
 ## Single sign-on (Keycloak)
 
@@ -681,7 +698,9 @@ docker compose up -d --build
 
 Keycloak takes about 30 seconds to start (the apps show *sign-in service not reachable*
 until then). Open the console at <https://localhost:8080> and the services at
-<https://localhost:8081> / <https://localhost:8082>. The backend applies the schema,
+<https://localhost:8081> / <https://localhost:8082>. For an unauthenticated, loopback-only
+chatbot preview with fictional policy samples, sample guidance, and no live request data, open
+<https://localhost:8180/preview>. The backend applies the schema,
 seeds, and creates / updates every account in Keycloak automatically on start.
 
 Optional, for the **Analytics** page: load demo history with

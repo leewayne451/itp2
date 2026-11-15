@@ -25,6 +25,9 @@ IDLE_TIMEOUT_MINUTES = int(os.environ.get("IDLE_TIMEOUT_MINUTES", 30))
 OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "console")
 OIDC_CLIENT_SECRET = _required_secret("OIDC_CLIENT_SECRET")
 APP_URL = os.environ.get("APP_URL", "https://localhost:8080").rstrip("/")
+CHATBOT_PREVIEW_ENABLED = os.environ.get("CHATBOT_PREVIEW_ENABLED", "").strip().lower() in {
+    "1", "true", "yes",
+}
 # Distinct cookie name: browser cookies are scoped by host only (not port), so
 # without this the console and the service dockers on localhost would clobber
 # each other's session cookie.

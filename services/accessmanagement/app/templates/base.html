@@ -29,6 +29,47 @@
       {% include "_flashes.html" %}
       {% block content %}{% endblock %}
     </main>
+    {% set is_chatbot_preview = chatbot_preview|default(false) %}
+    {% if current_user or is_chatbot_preview %}
+    <aside class="chat-assistant" id="chat-assistant"
+           data-endpoint="{{ url_for('chatbot.preview_chat') if is_chatbot_preview else url_for('chatbot.chat') }}"
+           data-preview="{{ 'true' if is_chatbot_preview else 'false' }}">
+      <section class="chat-panel" id="chat-panel" role="dialog" aria-labelledby="chat-title" hidden>
+        <div class="chat-panel-head">
+          <div>
+            <h2 id="chat-title">ServiceJourney assistant{% if is_chatbot_preview %} preview{% endif %}</h2>
+            <p class="small">Help with requests and workflow</p>
+          </div>
+          <button type="button" class="chat-close" id="chat-close" aria-label="Close assistant">×</button>
+        </div>
+        <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-relevant="additions">
+          <div class="chat-message assistant">
+            {% if is_chatbot_preview %}
+            Hi! Demo only: fictional policy examples and sample guidance; no real AI or live request data.
+            {% else %}
+            Hi! I can check requests linked to your signed-in account and explain ServiceJourney workflows.
+            MND HR policy documents are not loaded. You can try the fictional ExampleCo sample policy;
+            it is not official HR guidance.
+            {% endif %}
+          </div>
+        </div>
+        <div class="chat-prompts" aria-label="Suggested questions">
+          <button type="button" data-chat-prompt="What is the fictional ExampleCo policy for onboarding a new hire?">Sample policy (fictional)</button>
+          <button type="button" data-chat-prompt="What is the status of my access request?">Request status</button>
+          <button type="button" data-chat-prompt="How do I request access to Service One?">Request access</button>
+          <button type="button" data-chat-prompt="How do I request a return?">Return access</button>
+        </div>
+        <form class="chat-form" id="chat-form">
+          <label class="sr-only" for="chat-input">Ask a question</label>
+          <input id="chat-input" name="message" maxlength="500" autocomplete="off"
+                 placeholder="Ask about an IAM request…" required>
+          <button type="submit" class="primary">Send</button>
+        </form>
+      </section>
+      <button type="button" class="chat-toggle" id="chat-toggle" aria-controls="chat-panel"
+              aria-expanded="false">Ask assistant</button>
+    </aside>
+    {% endif %}
   {% endblock %}
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
