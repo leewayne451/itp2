@@ -223,7 +223,9 @@ def _hire(event, system):
         send_email(email, "[ServiceJourney] Welcome — set your password",
                    f"Hello {info['full_name']},\n\nYour ServiceJourney account '{info['username']}' has been created "
                    f"following your hire in the HR system.\n\nOpen {CONSOLE_URL}, choose \"Forgot Password?\" and use "
-                   f"the link we e-mail you to set your own password.")
+                   f"the link we e-mail you to set your own password.\n\nOnce signed in, My journey "
+                   f"({CONSOLE_URL}/my-journey) shows each onboarding step, who it is waiting on, when it "
+                   f"should be done, and your EUSS appointment with what to bring.")
         emp = _employee(info["username"])
     rid, err = workflows.raise_onboard(system["id"], emp, dept["id"], _why(event) + f" — onboarding into {dept['name']}")
     if err:

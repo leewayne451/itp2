@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% import "_tracker.html" as trk with context %}
+{% block title %}My journey{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><h2>My journey</h2></div>
+  <p class="muted small">Every request about you, step by step: who it is waiting on, when it should be done,
+    and your EUSS appointment with what to bring. Appointments are booked for you automatically
+    as soon as IT has finished; you can move yours to another free slot here.</p>
+</section>
+{% if not journeys %}
+<section class="panel"><p class="muted">Nothing in progress for you right now.</p></section>
+{% endif %}
+{% for t in journeys %}{{ trk.tracker_card(t) }}{% endfor %}
+{% endblock %}

@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Request #{{ r.id }}{% endblock %}
 {% block content %}
-<p><a class="btn-link" href="{{ url_for('dashboard.index') }}">← Back to dashboard</a></p>
+<p><a class="btn-link" href="{{ url_for('dashboard.index') }}">← Back to dashboard</a>
+   · <a class="btn-link" href="{{ url_for('tracker.track', rid=r.id) }}">Track this request</a></p>
 <section class="panel">
   <div class="panel-head"><h2>Request #{{ r.id }} — {{ TYPE_LABEL.get(r.type, r.type) }}</h2></div>
   <div class="detail-grid">
@@ -24,9 +25,36 @@
   </div>
 
   {% if r.documents %}
-  <h4 class="timeline-head">Documents</h4>
-  <div class="docs">
-    {% for d in r.documents %}<a class="btn-sm doc-btn" href="{{ url_for('assets.download', doc_id=d.id) }}">⬇ {{ d.filename }}</a>{% endfor %}
+  <h4 class="timeline-head">Protected supporting documents</h4>
+  <p class="small muted">Documents are quarantined until the privacy scan finishes. Downloads contain only the clean or redacted copy.</p>
+  <div class="document-list">
+    {% for d in r.documents %}
+    <div class="document-row">
+      <div>
+        <strong>{{ d.filename }}</strong>
+        {% if d.pii_summary %}
+          <div class="small muted">Masked: {% for kind, count in d.pii_summary.items() %}{{ count }} {{ kind|replace('_',' ') }}{{ ', ' if not loop.last }}{% endfor %}</div>
+        {% endif %}
+        {% if d.scan_method %}<div class="small muted">Scan: {{ d.scan_method|upper }}{% if d.ocr_confidence is not none %} · OCR confidence {{ '%.1f'|format(d.ocr_confidence) }}%{% endif %}</div>{% endif %}
+        {% if d.scan_error %}<div class="small text-error">{{ d.scan_error }}</div>{% endif %}
+        {% if d.review_note %}<div class="small muted">Privacy review: {{ d.review_note }}</div>{% endif %}
+        {% if d.retain_until %}<div class="small muted">Retention deadline: {{ d.retain_until | dt }}{% if d.legal_hold %} · legal hold: {{ d.legal_hold_reason }}{% endif %}</div>{% endif %}
+        {% if d.purged_at %}<div class="small muted">Purged: {{ d.purged_at | dt }}</div>{% endif %}
+      </div>
+      <div class="row-actions">
+        {% set safe = d.scan_status in ('clean','redacted') %}
+        <span class="pill {{ 'ok' if safe else 'bad' if d.scan_status in ('failed','review_required') else 'wait' }}">{{ d.scan_status|replace('_',' ') }}</span>
+        {% if safe %}<a class="btn-sm doc-btn" href="{{ url_for('assets.download', doc_id=d.id) }}">Download protected PDF</a>{% endif %}
+        {% if current_user.role == 'it_admin' and d.scan_status in ('failed','review_required','replacement_requested') %}<a class="btn-sm" href="{{ url_for('privacy_reviews.index') }}">Open privacy review</a>{% endif %}
+      </div>
+    </div>
+    {% if current_user.role == 'requestor' and d.scan_status == 'replacement_requested' %}
+    <form method="post" action="{{ url_for('privacy_reviews.replace', doc_id=d.id) }}" enctype="multipart/form-data" class="replacement-form">
+      <label>Replacement PDF <input type="file" name="documents" accept="application/pdf,.pdf" required></label>
+      <button type="submit" class="btn-sm primary">Upload replacement</button>
+    </form>
+    {% endif %}
+    {% endfor %}
   </div>
   {% endif %}
 

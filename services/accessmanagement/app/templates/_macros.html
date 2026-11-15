@@ -26,7 +26,8 @@
         {% endif %}
         {% if show_reason %}<td class="reason-cell">{{ r.justification or "— none given —" }}</td>{% endif %}
         <td><span class="pill {{ status_class(r.status) }}">{{ status_label(r.status) }}</span></td>
-        <td><a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a></td>
+        <td class="row-actions"><a class="btn-sm" href="{{ url_for('requests.detail', rid=r.id) }}">Details</a>
+            <a class="btn-sm" href="{{ url_for('tracker.track', rid=r.id) }}">Track</a></td>
       </tr>
       {% endfor %}
     </tbody>

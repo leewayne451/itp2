@@ -1,4 +1,5 @@
 """Database helpers: connections, retry-on-startup, schema + seed bootstrap."""
+import contextlib
 import os
 import time
 import pathlib
@@ -69,6 +70,23 @@ def query(sql, params=None, fetch="all"):
                 result = cur.fetchone()
         conn.commit()
         return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@contextlib.contextmanager
+def transaction():
+    """One transaction across several statements (dict rows): commit on success,
+    roll back on any error. Used where a check and a write must not interleave with
+    another request's, e.g. booking the last free place in an EUSS slot (CHANGE 011)."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            yield cur
+        conn.commit()
     except Exception:
         conn.rollback()
         raise

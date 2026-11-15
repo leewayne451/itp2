@@ -1,7 +1,7 @@
 """The request lifecycle: creation, listing, and every workflow transition."""
 from flask import Blueprint, request, jsonify, g
 
-from .. import audit, db, rotation, sync
+from .. import audit, db, document_privacy, rotation, scheduling, sync
 from ..auth import require_auth, require_role
 from ..core import (
     STATE_ROLE, APPROVAL_NEXT, STAFF_ROLES, KIND_OF,
@@ -251,14 +251,24 @@ def request_detail(rid):
 @bp.get("/api/documents/<int:doc_id>")
 @require_auth
 def get_document(doc_id):
-    doc = db.query("""SELECT d.filename, d.content_base64, r.requestor_id
+    doc = db.query("""SELECT d.id, d.request_id, d.filename, d.content_base64,
+                             d.scan_status, d.pii_summary, r.requestor_id
                       FROM request_documents d JOIN requests r ON r.id = d.request_id
                       WHERE d.id=%s""", (doc_id,), fetch="one")
     if not doc:
         return jsonify(error="Document not found"), 404
     if not _may_view(doc["requestor_id"]):
         return jsonify(error="Forbidden"), 403
-    return jsonify(filename=doc["filename"], content_base64=doc["content_base64"])
+    if doc["scan_status"] == "purged":
+        return jsonify(error="This document has been purged under the retention policy"), 410
+    if doc["scan_status"] not in document_privacy.SAFE_STATUSES or not doc["content_base64"]:
+        return jsonify(error=f"Document is not available ({doc['scan_status'].replace('_', ' ')})"), 409
+    audit.record("audit", "document_downloaded", target_type="document", target_id=doc_id,
+                 target_label=f"document #{doc_id}",
+                 details={"request_id": doc["request_id"], "scan_status": doc["scan_status"],
+                          "detected_types": doc["pii_summary"] or {}})
+    return jsonify(filename=doc["filename"], content_base64=doc["content_base64"],
+                   scan_status=doc["scan_status"])
 
 
 # --------------------------------------------------------------------------- #
@@ -280,6 +290,9 @@ def approve(rid):
                      target_type="request", target_id=rid,
                      target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
         return jsonify(error="You can't approve a request that is about you (separation of duties)."), 403
+    blocker = document_privacy.approval_blocker(rid)
+    if blocker:
+        return jsonify(error=blocker), 409
     set_status(rid, APPROVAL_NEXT[status])
     add_event(rid, g.user["id"], "approved", f"Approved by {g.user['role']}")
     return jsonify(request_dict(get_joined(rid)))
@@ -302,7 +315,8 @@ def reject(rid):
                      target_label=f"#{rid} {req['type']}", details={"actor_id": g.user["id"]})
         return jsonify(error="You can't reject a request that is about you (separation of duties)."), 403
     reason = (request.get_json(silent=True) or {}).get("reason", "").strip() or "No reason given"
-    db.query("UPDATE requests SET status='rejected', reject_reason=%s, updated_at=now() WHERE id=%s", (reason, rid), fetch=None)
+    db.query("UPDATE requests SET reject_reason=%s WHERE id=%s", (reason, rid), fetch=None)
+    set_status(rid, "rejected")
     if req["type"] == "shift":  # a rejected shift lifts the suspension
         db.query("UPDATE employees SET status='active' WHERE id=%s AND status='suspended'",
                  (req["target_employee_id"],), fetch=None)
@@ -325,9 +339,23 @@ def process_request(rid):
         return _process_onboard(req)
     if req["type"] == "return":
         set_status(rid, "pending_appointment")
-        add_event(rid, g.user["id"], "processed", "Offboarding approved; awaiting return appointment")
+        _processed(rid, "Offboarding approved; awaiting return appointment")
         return jsonify(request_dict(get_joined(rid)))
     return _process_grant(req)
+
+
+def _processed(rid, note):
+    """IT is done and the request is at the appointment step. Smart booking (CHANGE 011):
+    match it to the first suitable free EUSS slot straight away, so the requestor does not
+    have to arrange a time. With no free slot it waits for the requestor, as before."""
+    booked = None
+    try:
+        booked = scheduling.try_auto_book(rid)
+    except Exception as e:  # noqa: BLE001 — access is already granted; never fail the step
+        print(f"[scheduling] auto-booking failed for #{rid}: {e}", flush=True)
+    add_event(rid, g.user["id"], "processed", note, notify_incoming=booked is None)
+    if booked:
+        scheduling.announce(rid, booked)
 
 
 def _process_grant(req):
@@ -354,7 +382,7 @@ def _process_grant(req):
         audit.record("quota", "quota_override", target_type="request", target_id=req["id"],
                      target_label=f"#{req['id']} {req['type']}",
                      details={"exceeded": over, "justification": override_reason})
-    add_event(req["id"], g.user["id"], "processed", note)
+    _processed(req["id"], note)
     return jsonify(request_dict(get_joined(req["id"])))
 
 
@@ -392,7 +420,7 @@ def _process_into_department(req, verb):
         audit.record("quota", "quota_override", target_type="request", target_id=req["id"],
                      target_label=f"#{req['id']} {req['type']}",
                      details={"exceeded": over, "justification": override_reason})
-    add_event(req["id"], g.user["id"], "processed", note)
+    _processed(req["id"], note)
     return jsonify(request_dict(get_joined(req["id"])))
 
 
@@ -407,14 +435,34 @@ def _process_onboard(req):
 @bp.post("/api/requests/<int:rid>/appointment")
 @require_auth
 def book_appointment(rid):
+    """Book the appointment for a request that is waiting for one (no free slot was left
+    when IT processed it, or auto-matching is off). Body, one of:
+        {"slot_id": 12}            that EUSS slot (CHANGE 011)
+        {"auto": true}             the smart match: the first suitable free slot
+        {"appointment_at": "..."}  a time agreed outside the system (no slot is held)"""
     req, err = load_stage(rid, "pending_appointment")
     if err:
         return err
     if req["requestor_id"] != g.user["id"] and not is_system_actor_id(req["requestor_id"]):
         return jsonify(error="Only the requestor who raised this may book the appointment"), 403
-    when = (request.get_json(silent=True) or {}).get("appointment_at")
+    body = request.get_json(silent=True) or {}
+    if body.get("slot_id") or body.get("auto"):
+        try:
+            if body.get("auto"):
+                slot = scheduling.try_auto_book(rid, method="chosen")
+                if not slot:
+                    return jsonify(error="No EUSS slot is free in the booking window. Ask EUSS to open more slots."), 409
+                scheduling.announce(rid, slot, actor_id=g.user["id"])
+            else:
+                scheduling.reschedule(rid, int(body["slot_id"]), g.user["id"])
+        except scheduling.SlotUnavailable as e:
+            return jsonify(error=str(e)), 409
+        except (TypeError, ValueError):
+            return jsonify(error="slot_id must be a number"), 400
+        return jsonify(request_dict(get_joined(rid)))
+    when = body.get("appointment_at")
     if not when:
-        return jsonify(error="appointment_at is required"), 400
+        return jsonify(error="slot_id or appointment_at is required"), 400
     db.query("UPDATE requests SET appointment_at=%s, status='pending_euss', updated_at=now() WHERE id=%s",
              (when, rid), fetch=None)
     add_event(rid, g.user["id"], "appointment_booked", f"Appointment booked for {when}")
@@ -489,6 +537,7 @@ def provision_asset(rid):
     if primary:
         db.query("UPDATE requests SET asset_id=%s WHERE id=%s", (primary["id"], rid), fetch=None)
     set_status(rid, "completed")
+    scheduling.close_booking(rid)
     tags_txt = ", ".join(a["asset_tag"] for a in chosen) if chosen else "no new assets (already held)"
     add_event(rid, g.user["id"], "provisioned", f"Provisioned {tags_txt}")
     return jsonify(request_dict(get_joined(rid)))
@@ -515,4 +564,5 @@ def retrieve_asset(rid):
     add_event(rid, g.user["id"], "retrieved",
               f"Revoked {service_names(removed)}; retrieved {', '.join(released) if released else 'no asset'}")
     set_status(rid, "completed")
+    scheduling.close_booking(rid)
     return jsonify(request_dict(get_joined(rid)))

@@ -108,12 +108,19 @@ def process(rid):
 @bp.post("/requests/<int:rid>/appointment")
 @role_required("requestor")
 def appointment(rid):
-    when = request.form.get("appointment_at", "").strip()
-    if not when:
-        flash("Pick a date and time for the appointment.", "error")
-        return _back()
-    resp = call("POST", f"/api/requests/{rid}/appointment", json={"appointment_at": when})
-    flash("Appointment booked — sent to EUSS." if resp.ok else error_of(resp), "ok" if resp.ok else "error")
+    """Book an EUSS slot for a request that could not be matched automatically (CHANGE 011):
+    the slot picked from the list, or the smart match ("Book the best slot")."""
+    if request.form.get("auto"):
+        body = {"auto": True}
+    else:
+        slot_id = request.form.get("slot_id", "").strip()
+        if not slot_id:
+            flash("Pick one of the free EUSS slots.", "error")
+            return _back()
+        body = {"slot_id": int(slot_id)}
+    resp = call("POST", f"/api/requests/{rid}/appointment", json=body)
+    flash("Appointment booked — the employee has been sent the time, place and what to bring."
+          if resp.ok else error_of(resp), "ok" if resp.ok else "error")
     return _back()
 
 

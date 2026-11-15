@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS requests (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+UPDATE requests SET closed_at=updated_at
+ WHERE status IN ('completed','rejected') AND closed_at IS NULL;
 -- Upgrade existing volumes to the shift-capable shape.
 ALTER TABLE requests ALTER COLUMN service_id DROP NOT NULL;
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS target_department_id INTEGER REFERENCES departments(id);
@@ -97,9 +100,71 @@ CREATE TABLE IF NOT EXISTS request_documents (
     id             SERIAL PRIMARY KEY,
     request_id     INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
     filename       TEXT NOT NULL,
-    content_base64 TEXT NOT NULL,
-    uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    content_base64 TEXT,
+    uploaded_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scan_status    TEXT NOT NULL DEFAULT 'pending',
+    pii_summary    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_sha256  TEXT,
+    content_sha256 TEXT,
+    scanned_at     TIMESTAMPTZ,
+    scan_error     TEXT,
+    retention_seconds INTEGER NOT NULL DEFAULT 2592000,
+    retain_until   TIMESTAMPTZ,
+    legal_hold     BOOLEAN NOT NULL DEFAULT FALSE,
+    purged_at      TIMESTAMPTZ,
+    review_note    TEXT,
+    review_action_at TIMESTAMPTZ,
+    reviewed_by_id INTEGER REFERENCES employees(id),
+    removed_at     TIMESTAMPTZ,
+    scan_method    TEXT,
+    ocr_confidence NUMERIC(5,2),
+    legal_hold_reason TEXT,
+    legal_hold_at  TIMESTAMPTZ,
+    legal_hold_by_id INTEGER REFERENCES employees(id),
+    legal_hold_released_at TIMESTAMPTZ,
+    legal_hold_release_reason TEXT,
+    legal_hold_released_by_id INTEGER REFERENCES employees(id)
 );
+-- Upgrade existing databases. Existing attachments are deliberately queued for
+-- scanning rather than being assumed safe.
+ALTER TABLE request_documents ALTER COLUMN content_base64 DROP NOT NULL;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS pii_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS source_sha256 TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scan_error TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS retention_seconds INTEGER NOT NULL DEFAULT 2592000;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS retain_until TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS purged_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS review_action_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS reviewed_by_id INTEGER REFERENCES employees(id);
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS scan_method TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS ocr_confidence NUMERIC(5,2);
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_reason TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_by_id INTEGER REFERENCES employees(id);
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_released_at TIMESTAMPTZ;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_release_reason TEXT;
+ALTER TABLE request_documents ADD COLUMN IF NOT EXISTS legal_hold_released_by_id INTEGER REFERENCES employees(id);
+CREATE INDEX IF NOT EXISTS request_documents_scan_queue ON request_documents (scan_status, id);
+CREATE INDEX IF NOT EXISTS request_documents_retention ON request_documents (retain_until)
+ WHERE purged_at IS NULL AND legal_hold=FALSE;
+
+CREATE TABLE IF NOT EXISTS document_retention_policies (
+    outcome       TEXT PRIMARY KEY CHECK (outcome IN ('completed','rejected')),
+    label         TEXT NOT NULL,
+    retention_seconds INTEGER NOT NULL CHECK (retention_seconds >= 60),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by_id INTEGER REFERENCES employees(id)
+);
+INSERT INTO document_retention_policies (outcome,label,retention_seconds) VALUES
+    ('completed','Completed request documents',300),
+    ('rejected','Rejected request documents',120)
+ON CONFLICT (outcome) DO NOTHING;
 
 -- Chain-of-custody: every time an asset is provisioned to or retrieved from an
 -- employee. Lets EUSS see where a laptop has been and who the last holder was.
@@ -284,6 +349,90 @@ CREATE TABLE IF NOT EXISTS rotation_decisions (
 CREATE INDEX IF NOT EXISTS rotation_decisions_emp ON rotation_decisions (employee_id, decided_at DESC);
 
 -- --------------------------------------------------------------------------- --
+-- Access review and reconciliation  (CHANGE 010)
+-- --------------------------------------------------------------------------- --
+-- One campaign covers one department and is assigned to one Director. Items are
+-- a point-in-time snapshot of expected access, actual access and assigned assets.
+-- A revoke removes digital access immediately; custody remains with the employee
+-- until EUSS completes the collection task.
+CREATE TABLE IF NOT EXISTS access_review_campaigns (
+    id                   SERIAL PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    department_id        INTEGER NOT NULL REFERENCES departments(id),
+    reviewer_id          INTEGER NOT NULL REFERENCES employees(id),
+    created_by           INTEGER NOT NULL REFERENCES employees(id),
+    status               TEXT NOT NULL DEFAULT 'in_review',
+    due_at               TIMESTAMPTZ NOT NULL,
+    snapshot_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_reconciled_at   TIMESTAMPTZ,
+    completed_at         TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT access_review_campaign_status
+      CHECK (status IN ('in_review', 'remediation', 'completed', 'overdue'))
+);
+
+CREATE TABLE IF NOT EXISTS access_review_items (
+    id                   SERIAL PRIMARY KEY,
+    campaign_id          INTEGER NOT NULL REFERENCES access_review_campaigns(id) ON DELETE CASCADE,
+    employee_id          INTEGER NOT NULL REFERENCES employees(id),
+    service_id           INTEGER NOT NULL REFERENCES services(id),
+    actual_access        BOOLEAN NOT NULL,
+    expected_access      BOOLEAN NOT NULL,
+    source_request_id    INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+    asset_id             INTEGER REFERENCES assets(id) ON DELETE SET NULL,
+    finding_code         TEXT NOT NULL,
+    findings             JSONB NOT NULL DEFAULT '[]'::jsonb,
+    risk_level           TEXT NOT NULL,
+    decision             TEXT,
+    decision_reason      TEXT,
+    reviewed_by          INTEGER REFERENCES employees(id),
+    reviewed_at          TIMESTAMPTZ,
+    remediation_status   TEXT NOT NULL DEFAULT 'pending',
+    return_request_id    INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+    remediated_at        TIMESTAMPTZ,
+    last_reconciled_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (campaign_id, employee_id, service_id),
+    CONSTRAINT access_review_item_decision
+      CHECK (decision IS NULL OR decision IN ('keep', 'revoke', 'investigate')),
+    CONSTRAINT access_review_item_risk
+      CHECK (risk_level IN ('critical', 'high', 'medium', 'low')),
+    CONSTRAINT access_review_item_remediation
+      CHECK (remediation_status IN ('pending', 'accepted', 'investigating', 'pending_collection', 'remediated',
+                                    'return_pending_hr', 'return_pending_director', 'return_pending_aa',
+                                    'return_pending_it', 'return_pending_appointment', 'return_pending_euss'))
+);
+
+-- Safe upgrade path for databases created before governed review returns existed.
+ALTER TABLE access_review_items ADD COLUMN IF NOT EXISTS return_request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL;
+ALTER TABLE access_review_items DROP CONSTRAINT IF EXISTS access_review_item_remediation;
+ALTER TABLE access_review_items ADD CONSTRAINT access_review_item_remediation
+  CHECK (remediation_status IN ('pending', 'accepted', 'investigating', 'pending_collection', 'remediated',
+                                'return_pending_hr', 'return_pending_director', 'return_pending_aa',
+                                'return_pending_it', 'return_pending_appointment', 'return_pending_euss'));
+
+CREATE TABLE IF NOT EXISTS access_review_asset_tasks (
+    id                   SERIAL PRIMARY KEY,
+    review_item_id       INTEGER NOT NULL REFERENCES access_review_items(id) ON DELETE CASCADE,
+    asset_id             INTEGER NOT NULL REFERENCES assets(id),
+    employee_id          INTEGER NOT NULL REFERENCES employees(id),
+    status               TEXT NOT NULL DEFAULT 'pending',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_by         INTEGER REFERENCES employees(id),
+    completed_at         TIMESTAMPTZ,
+    UNIQUE (review_item_id, asset_id),
+    CONSTRAINT access_review_asset_task_status CHECK (status IN ('pending', 'retrieved'))
+);
+
+CREATE INDEX IF NOT EXISTS access_review_campaign_reviewer ON access_review_campaigns (reviewer_id, status);
+-- A department may have historical completed campaigns, but never two active
+-- attestations competing for decisions at the same time.
+CREATE UNIQUE INDEX IF NOT EXISTS access_review_one_open_per_department
+    ON access_review_campaigns (department_id)
+    WHERE status IN ('in_review', 'remediation', 'overdue');
+CREATE INDEX IF NOT EXISTS access_review_item_campaign ON access_review_items (campaign_id, remediation_status);
+CREATE INDEX IF NOT EXISTS access_review_asset_task_status ON access_review_asset_tasks (status, employee_id);
+
+-- --------------------------------------------------------------------------- --
 -- HR-system webhook  (CHANGE 008)
 -- --------------------------------------------------------------------------- --
 -- One row per event the HR system (HRMS / ServiceNow HRSD) has sent. event_id is the
@@ -301,3 +450,48 @@ CREATE TABLE IF NOT EXISTS hr_events (
     processed_at      TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS hr_events_received ON hr_events (received_at DESC);
+
+-- --------------------------------------------------------------------------- --
+-- New-hire journey tracker + smart appointment booking  (CHANGE 011)
+-- --------------------------------------------------------------------------- --
+-- EUSS appointment slots. Regular ones come from the EUSS roster (opening hours,
+-- generated a few weeks ahead by app/scheduling.py); EUSS can add one-off slots and
+-- block any slot (leave, training, a public holiday). capacity = desks serving at once.
+CREATE TABLE IF NOT EXISTS euss_slots (
+    id          SERIAL PRIMARY KEY,
+    starts_at   TIMESTAMPTZ NOT NULL,
+    ends_at     TIMESTAMPTZ NOT NULL,
+    location    TEXT NOT NULL,
+    capacity    INTEGER NOT NULL DEFAULT 1,
+    status      TEXT NOT NULL DEFAULT 'open',
+    source      TEXT NOT NULL DEFAULT 'roster',          -- roster | manual
+    note        TEXT,                                    -- why it was blocked / added
+    created_by  INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (starts_at, location),
+    CONSTRAINT euss_slot_status CHECK (status IN ('open', 'blocked')),
+    CONSTRAINT euss_slot_capacity CHECK (capacity >= 0),
+    CONSTRAINT euss_slot_times CHECK (ends_at > starts_at)
+);
+CREATE INDEX IF NOT EXISTS euss_slots_start ON euss_slots (starts_at);
+
+-- Which request holds which slot. A request has at most one live ('booked') booking;
+-- a move keeps the old row as 'moved' so the history shows every change.
+--   method: auto (matched when IT processed it) | chosen (picked by the employee or
+--           requestor) | rematched (its slot was blocked, moved by the system)
+CREATE TABLE IF NOT EXISTS euss_bookings (
+    id          SERIAL PRIMARY KEY,
+    slot_id     INTEGER NOT NULL REFERENCES euss_slots(id),
+    request_id  INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    status      TEXT NOT NULL DEFAULT 'booked',
+    method      TEXT NOT NULL,
+    reason      TEXT,                                    -- why this slot was chosen
+    booked_by   INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ended_at    TIMESTAMPTZ,
+    CONSTRAINT euss_booking_status CHECK (status IN ('booked', 'moved', 'done')),
+    CONSTRAINT euss_booking_method CHECK (method IN ('auto', 'chosen', 'rematched'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS euss_bookings_one_live
+    ON euss_bookings (request_id) WHERE status = 'booked';
+CREATE INDEX IF NOT EXISTS euss_bookings_slot ON euss_bookings (slot_id) WHERE status = 'booked';

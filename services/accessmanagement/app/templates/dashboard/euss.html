@@ -7,12 +7,13 @@
   <p class="muted small">Assign a specific, matching-kind asset tag for each resource the employee needs. Tags are required and validated.</p>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Type</th><th>Target (dept)</th><th>Resource</th><th>Reason given</th><th>Assign asset(s)</th></tr></thead>
+      <thead><tr><th>#</th><th>Appointment</th><th>Type</th><th>Target (dept)</th><th>Resource</th><th>Reason given</th><th>Assign asset(s)</th></tr></thead>
       <tbody>
-        {% if not provisions %}<tr><td colspan="6" class="muted">Nothing to provision.</td></tr>{% endif %}
+        {% if not provisions %}<tr><td colspan="7" class="muted">Nothing to provision.</td></tr>{% endif %}
         {% for r in provisions %}
         <tr>
           <td>{{ r.id }}</td>
+          <td class="small nowrap">{{ r.appointment_at | dday }}</td>
           <td><span class="type-tag {{ r.type }}">{{ r.type }}</span></td>
           <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
           <td>{{ req_resource(r) }}</td>
@@ -52,12 +53,13 @@
   <p class="muted small">Return requests. Retrieving revokes the access and returns the asset.</p>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Target (dept)</th><th>Resource</th><th>Requestor</th><th>Reason given</th><th>Actions</th></tr></thead>
+      <thead><tr><th>#</th><th>Appointment</th><th>Target (dept)</th><th>Resource</th><th>Requestor</th><th>Reason given</th><th>Actions</th></tr></thead>
       <tbody>
-        {% if not returns %}<tr><td colspan="6" class="muted">Nothing to retrieve.</td></tr>{% endif %}
+        {% if not returns %}<tr><td colspan="7" class="muted">Nothing to retrieve.</td></tr>{% endif %}
         {% for r in returns %}
         <tr>
           <td>{{ r.id }}</td>
+          <td class="small nowrap">{{ r.appointment_at | dday }}</td>
           <td>{{ r.target_name }}<div class="small muted">{{ r.target_department_name or "No dept" }}</div></td>
           <td>{{ req_resource(r) }}</td>
           <td>{{ r.requestor_name }}<div class="small muted">{{ behalf_label(r) }}</div></td>
@@ -73,6 +75,54 @@
       </tbody>
     </table>
   </div>
+</section>
+
+<section class="panel" id="slots">
+  <div class="panel-head"><h2>Appointment slots — next 7 days</h2></div>
+  {% set st = slot_board.settings or {} %}
+  <p class="muted small">Requests are booked into these automatically when IT finishes them
+    ({{ st.slot_minutes }}-minute slots, {{ st.desks }} desk(s), at least {{ "%g" | format(st.lead_hours or 0) }} h to prepare).
+    Block a slot for leave or training: anyone booked in it is moved to the next free slot and told by e-mail.</p>
+  {% for day, rows in (slot_board.slots or []) | groupby("day") %}
+  <details class="slot-day" {{ 'open' if loop.first }}>
+    <summary><strong>{{ rows[0].day_label }}</strong> <span class="small muted">· {{ rows | sum(attribute='free') }} free place(s),
+      {{ rows | map(attribute='bookings') | map('length') | sum }} booked</span></summary>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Places</th><th>Booked</th><th></th></tr></thead>
+        <tbody>
+        {% for s in rows %}
+          <tr class="{{ 'slot-blocked' if s.status == 'blocked' }}">
+            <td class="nowrap">{{ s.starts_at | hm }}–{{ s.ends_at | hm }}{% if s.source == 'manual' %} <span class="pill wait">extra</span>{% endif %}</td>
+            <td>{% if s.status == 'blocked' %}<span class="pill bad">blocked</span> <span class="small muted">{{ s.note }}</span>
+                {% else %}{{ s.free }} / {{ s.capacity }} free{% endif %}</td>
+            <td class="small">{% for b in s.bookings %}<a href="{{ url_for('tracker.track', rid=b.request_id) }}">#{{ b.request_id }} {{ b.target_name }}</a> <span class="type-tag {{ b.type }}">{{ b.type }}</span>{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+            <td>
+              {% if s.status == 'blocked' %}
+              <form method="post" action="{{ url_for('tracker.change_slot', slot_id=s.id, action='reopen') }}" class="inline-form">
+                <button class="btn-sm" type="submit">Re-open</button></form>
+              {% else %}
+              <form method="post" action="{{ url_for('tracker.change_slot', slot_id=s.id, action='block') }}" class="inline-form">
+                <input class="reason-in" name="reason" placeholder="reason" required>
+                <button class="btn-sm danger" type="submit">Block</button></form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% else %}
+  <p class="muted small">No slots in the next 7 days.</p>
+  {% endfor %}
+  <form method="post" action="{{ url_for('tracker.add_slot') }}" class="stack-form inline-grid">
+    <label>Extra slot (SGT) <input type="datetime-local" name="starts_at" required></label>
+    <label>Minutes <input type="number" name="minutes" min="5" max="240" value="{{ st.slot_minutes or 30 }}"></label>
+    <label>Places <input type="number" name="capacity" min="1" max="20" value="1"></label>
+    <label>Note <input name="note" placeholder="optional"></label>
+    <button class="primary" type="submit">Add slot</button>
+  </form>
 </section>
 
 <section class="panel">

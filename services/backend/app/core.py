@@ -4,6 +4,7 @@ access + quota + asset helpers, request serialization and notifications.
 """
 import base64
 import binascii
+import threading
 
 from flask import jsonify, g
 
@@ -32,13 +33,19 @@ STAFF_ROLES = ("hr", "director", "aa", "it_admin", "euss", "admin")
 # The HR-system webhook (CHANGE 008) raises requests as this account. It exists only so a
 # request has a requestor to show; it has no Keycloak login, no sign-in and no console access.
 SYSTEM_USERNAME = "hr-system"
+ACCESS_REVIEW_SYSTEM_USERNAME = "access-review-system"
 SYSTEM_ROLE = "system"
 
 
-def system_actor():
-    """The automation account (id, username, full_name, role), or None if not seeded."""
+def system_actor(username=SYSTEM_USERNAME):
+    """A non-login automation account, or None if it has not been seeded."""
     return db.query("SELECT id, username, full_name, role FROM employees WHERE username=%s AND role=%s",
-                    (SYSTEM_USERNAME, SYSTEM_ROLE), fetch="one")
+                    (username, SYSTEM_ROLE), fetch="one")
+
+
+def access_review_system_actor():
+    """The automation identity that owns returns initiated by an access review."""
+    return system_actor(ACCESS_REVIEW_SYSTEM_USERNAME)
 
 
 def is_system_actor_id(emp_id):
@@ -55,10 +62,14 @@ def get_request(rid):
 
 
 def set_status(rid, status):
-    db.query("UPDATE requests SET status = %s, updated_at = now() WHERE id = %s", (status, rid), fetch=None)
+    db.query(
+        """UPDATE requests SET status=%s, updated_at=now(),
+             closed_at=CASE WHEN %s IN ('completed','rejected')
+                            THEN COALESCE(closed_at, now()) ELSE closed_at END
+           WHERE id=%s""", (status, status, rid), fetch=None)
 
 
-def add_event(rid, actor_id, action, note=None):
+def add_event(rid, actor_id, action, note=None, notify_incoming=True, notify_target=True, background=False):
     db.query("INSERT INTO request_events (request_id, actor_id, action, note) VALUES (%s,%s,%s,%s)",
              (rid, actor_id, action, note), fetch=None)
     r = get_joined(rid)
@@ -69,7 +80,22 @@ def add_event(rid, actor_id, action, note=None):
                      details={"type": r["type"], "status": r["status"], "note": note,
                               "resource": _resource_desc(r), "target_employee": r["target_username"],
                               "on_behalf": r["on_behalf"]})
-    notify(rid, action, note, actor_id)  # notify next approver, requestor/target, and the actor
+    # notify next approver, requestor/target, and the actor. notify_incoming=False skips the
+    # "action required" mail when the next step is done by the system at once (CHANGE 011).
+    # background=True sends the e-mails on a worker thread: real SMTP can take seconds per
+    # message, which must not hold up the person's click.
+    if background:
+        threading.Thread(target=_notify_quietly, args=(rid, action, note, actor_id, notify_incoming, notify_target),
+                         daemon=True).start()
+    else:
+        notify(rid, action, note, actor_id, incoming=notify_incoming, target=notify_target)
+
+
+def _notify_quietly(*args):
+    try:
+        notify(*args[:4], incoming=args[4], target=args[5])
+    except Exception as e:  # noqa: BLE001 — e-mail is best-effort
+        print(f"[email] notification for request #{args[0]} failed: {e}", flush=True)
 
 
 def _resource_desc(r):
@@ -102,7 +128,7 @@ def _email_of(emp_id):
     return row if row and row["email"] else None
 
 
-def notify(rid, action, note=None, actor_id=None):
+def notify(rid, action, note=None, actor_id=None, incoming=True, target=True):
     """Send the notifications around a request event:
 
       1. INCOMING  — whoever the request has just landed on ("action required")
@@ -132,7 +158,7 @@ def notify(rid, action, note=None, actor_id=None):
     status_line = f"Status: {STATUS_TEXT.get(r['status'], r['status'])}"
 
     # 1) The request has just arrived in someone's queue.
-    role = STATE_ROLE.get(r["status"])
+    role = STATE_ROLE.get(r["status"]) if incoming else None
     if role:
         if role == "requestor":
             # A request raised by the HR-system account has no mailbox: every Requestor is told.
@@ -146,7 +172,7 @@ def notify(rid, action, note=None, actor_id=None):
                  f"Open the console to review and act on it.")
 
     # 2) Progress update for the requestor and the employee it concerns.
-    for eid in (r["requestor_id"], r["target_employee_id"]):
+    for eid in ((r["requestor_id"], r["target_employee_id"]) if target else (r["requestor_id"],)):
         send(_email_of(eid), f"[ServiceJourney] Request #{rid} — {action}",
              f"{header}\n\nUpdate: {action}\n{status_line}" + (f"\nNote: {note}" if note else ""))
 
@@ -195,8 +221,10 @@ def attach_documents(rid, documents):
         filename = (doc.get("filename") or "document").strip()
         content = doc.get("content_base64") or ""
         if content:
-            db.query("INSERT INTO request_documents (request_id, filename, content_base64) VALUES (%s,%s,%s)",
-                     (rid, filename, content), fetch=None)
+            db.query(
+                """INSERT INTO request_documents
+                     (request_id, filename, content_base64, scan_status)
+                   VALUES (%s,%s,%s,'pending')""", (rid, filename, content), fetch=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -442,8 +470,27 @@ def request_dict(row, with_events=False):
             "action": e["action"], "note": e["note"], "created_at": e["created_at"].isoformat(),
             "actor_name": e["actor_name"], "actor_role": e["actor_role"],
         } for e in evs]
-        docs = db.query("SELECT id, filename FROM request_documents WHERE request_id=%s ORDER BY id", (row["id"],))
-        d["documents"] = [{"id": x["id"], "filename": x["filename"]} for x in docs]
+        docs = db.query(
+            """SELECT id, filename, scan_status, pii_summary, scan_error,
+                      retain_until, legal_hold, purged_at, scanned_at, review_note,
+                      review_action_at, removed_at, scan_method, ocr_confidence,
+                      legal_hold_reason, legal_hold_at
+                 FROM request_documents WHERE request_id=%s ORDER BY id""", (row["id"],))
+        d["documents"] = [{
+            "id": x["id"], "filename": x["filename"], "scan_status": x["scan_status"],
+            "pii_summary": x["pii_summary"] or {}, "scan_error": x["scan_error"],
+            "retain_until": x["retain_until"].isoformat() if x["retain_until"] else None,
+            "legal_hold": x["legal_hold"],
+            "purged_at": x["purged_at"].isoformat() if x["purged_at"] else None,
+            "scanned_at": x["scanned_at"].isoformat() if x["scanned_at"] else None,
+            "review_note": x["review_note"],
+            "review_action_at": x["review_action_at"].isoformat() if x["review_action_at"] else None,
+            "removed_at": x["removed_at"].isoformat() if x["removed_at"] else None,
+            "scan_method": x["scan_method"],
+            "ocr_confidence": float(x["ocr_confidence"]) if x["ocr_confidence"] is not None else None,
+            "legal_hold_reason": x["legal_hold_reason"],
+            "legal_hold_at": x["legal_hold_at"].isoformat() if x["legal_hold_at"] else None,
+        } for x in docs]
     return d
 
 

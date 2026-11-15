@@ -79,6 +79,26 @@ services:
       # signed with this shared secret.
       HR_WEBHOOK_SECRET: ${HRMS_WEBHOOK_SECRET:?run python scripts/generate_secrets.py}
       CONSOLE_URL: https://localhost:8080
+      # Smart EUSS appointment booking (CHANGE 011): the EUSS desk's roster (Singapore time).
+      # Requests are booked into the first free slot at least EUSS_LEAD_HOURS after IT is done.
+      APPOINTMENT_AUTO_MATCH: ${APPOINTMENT_AUTO_MATCH:-true}
+      EUSS_LOCATION: ${EUSS_LOCATION:-EUSS Service Desk, Level 1}
+      EUSS_HOURS: ${EUSS_HOURS:-09:00-12:00,14:00-17:00}
+      EUSS_DAYS: ${EUSS_DAYS:-0,1,2,3,4}            # Monday = 0
+      EUSS_SLOT_MINUTES: ${EUSS_SLOT_MINUTES:-30}
+      EUSS_DESKS: ${EUSS_DESKS:-2}                  # people served at the same time
+      EUSS_LEAD_HOURS: ${EUSS_LEAD_HOURS:-24}       # time EUSS needs to prepare the equipment
+      EUSS_HORIZON_DAYS: ${EUSS_HORIZON_DAYS:-21}   # how far ahead slots are opened
+      # Personal-data document protection (CHANGE 012). Production must replace the
+      # 30-day POC default with MND's approved records-retention schedule. For a quick
+      # purge demo set DOCUMENT_RETENTION_SECONDS=120 in .env and rebuild the backend.
+      DOCUMENT_SCAN_INTERVAL_SECONDS: ${DOCUMENT_SCAN_INTERVAL_SECONDS:-3}
+      # Separate from polling: guarantees a visible quarantine window for approval-gate testing.
+      DOCUMENT_MIN_QUARANTINE_SECONDS: ${DOCUMENT_MIN_QUARANTINE_SECONDS:-0}
+      DOCUMENT_RETENTION_SECONDS: ${DOCUMENT_RETENTION_SECONDS:-2592000}
+      DOCUMENT_PURGE_INTERVAL_SECONDS: ${DOCUMENT_PURGE_INTERVAL_SECONDS:-30}
+      DOCUMENT_OCR_DPI: ${DOCUMENT_OCR_DPI:-200}
+      DOCUMENT_OCR_MIN_CONFIDENCE: ${DOCUMENT_OCR_MIN_CONFIDENCE:-60}
     depends_on:
       postgres:
         condition: service_healthy

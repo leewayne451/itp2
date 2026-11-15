@@ -58,7 +58,9 @@ services/
       passwords.py             temporary-password generator, legacy plaintext migration
       audit.py                 tamper-evident append-only audit trail (HMAC chain, file copy, verify)
       rotation.py              Mandatory Job Rotation tracker (due check, e-mails, decisions)
-      api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py journey.py   (route blueprints; hr.py = HR webhook)
+      scheduling.py            EUSS slots, smart appointment booking, tracker data (CHANGE 011)
+      tracker_logic.py         pure rules: roster, slot choice, what to bring, tracker steps
+      api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py journey.py tracker.py   (route blueprints; hr.py = HR webhook)
       sql/       schema.sql  seed.sql  journey.sql (analytics tables)
   accessmanagement/            server-rendered console (OIDC client "console")
     run.py
@@ -66,8 +68,8 @@ services/
       __init__.py              app factory
       config.py  backend_client.py  labels.py
       oidc.py  oidc_client.py  token_store.py   (SSO sign-in, tokens kept server-side)
-      views/     auth.py dashboard.py requests.py admin.py quotas.py assets.py security.py audit.py rotations.py journey.py   (blueprints)
-      templates/ base.html login.html security.html journey.html dashboard/*.html …
+      views/     auth.py dashboard.py requests.py admin.py quotas.py assets.py security.py audit.py rotations.py journey.py tracker.py   (blueprints)
+      templates/ base.html login.html security.html journey.html my_journey.html track.html _tracker.html dashboard/*.html …
       static/    style.css  app.js  (small, generic UI glue only)
   service1/ service2/          demo services (OIDC clients "service1" / "service2", same oidc.py)
   hrms/                        HR system of record stand-in (CHANGE 008): UI + signed webhook sender
@@ -229,14 +231,14 @@ audit trail. Set `MAILBOX_URL` to include the forgot-password e-mail.
 ## The workflow
 
 The requestor raises one of **four** request types, and **every** one follows the
-**same lifecycle** — it always ends with the requestor booking an appointment and
-then EUSS, never earlier:
+**same lifecycle** — it always ends with an EUSS appointment and then EUSS, never earlier:
 
 ```
 Requestor submits
    → HR → Director → Approving Authority        (any may reject → back to requestor)
    → IT Admin "Process"                         (executes the access change)
-   → Requestor books an APPOINTMENT             (always — for every type)
+   → APPOINTMENT booked automatically           (first free EUSS slot, CHANGE 011;
+                                                 the requestor books only if none is free)
    → EUSS provisions / retrieves the asset      → COMPLETED
 ```
 
@@ -373,6 +375,60 @@ officer joins a department (onboard / shift processed)  -> department_since = th
 * **Tunables** (backend environment, optional): `MJR_ROTATION_YEARS` (4),
   `MJR_DUE_SOON_DAYS` (90), `MJR_KEEP_REVIEW_MONTHS` (12), `MJR_CHECK_INTERVAL_SECONDS`
   (3600 — the check also runs at start-up).
+
+## New-hire journey tracker & smart appointment booking
+
+A new hire (or anyone a request is about) signs in and lands on **My journey**: each request
+shown like a parcel-delivery page. Every step is listed with **who it is waiting on** (by
+name), **when it should be done**, an **estimated finish date** for the whole request, and
+the **EUSS appointment with what to bring**. Nobody has to e-mail back and forth to find a
+time: when IT finishes, the request is matched to a free EUSS slot by itself.
+
+```
+IT Admin "Process"
+   -> scheduler picks the slot:  free place, >= 24 h ahead (EUSS prepares the equipment),
+                                 never clashing with the person's other appointment,
+                                 next to it if there is one (one trip, not two),
+                                 otherwise the earliest
+   -> request goes straight to EUSS; timeline: "appointment_booked" by
+      Appointment Scheduler (Automated)
+   -> the employee gets an e-mail: when, where, what to bring, link to My journey
+   -> employee / requestor can move it to another free slot on the tracker
+   -> EUSS blocks a slot (training, leave)  -> everyone in it is moved to the next free slot
+                                               and told; with none free it goes back to the
+                                               requestor's "Appointments to book"
+```
+
+| Who | Sees / does |
+|-----|-------------|
+| **Employee** | **My journey** (their home page): steps, who it waits on, estimated dates, appointment, what to bring; **Move my appointment** to another free slot |
+| **Requestor** | **Track** on every request; *Appointments to book* now only lists requests no slot was free for: **Book** the suggested slot or pick one |
+| **Staff** | **Track this request** from any request's details |
+| **EUSS** | *Appointment slots — next 7 days*: free / booked places and who is coming; **Block** (with a reason) / **Re-open**; **Add slot** for extra capacity. The provision and return queues show the appointment time, soonest first |
+
+* **Slots** come from the EUSS roster (`EUSS_HOURS`, `EUSS_DAYS`, `EUSS_SLOT_MINUTES`,
+  `EUSS_DESKS` = places per slot), opened `EUSS_HORIZON_DAYS` ahead and topped up as time
+  passes. A blocked slot stays blocked. Times are Singapore time.
+* **No double booking:** the slot row is locked while a place is taken, so two requests can
+  never take the last place together. A request closed some other way (e.g. the HR kill switch)
+  frees its place at once.
+* **Estimates** come from the Analytics pipeline's typical time per step (CHANGE 007) for that
+  request type, falling back to all types and then to standard turnaround times; approval steps
+  are moved to office hours (no "expected Saturday 06:57"). A step past its usual time is
+  flagged *Taking longer than usual*. Before the appointment exists, the finish date uses the
+  slot the request would actually get.
+* **What to bring** depends on the request: onboarding (ID, signed acceptable-use policy, phone),
+  laptop grant, shift (current laptop), return (laptop, charger, tokens; back up first).
+  Edit `what_to_bring()` in `services/backend/app/tracker_logic.py`.
+* **Privacy:** an employee sees only requests about themselves, and the tracker leaves out the
+  justification and documents. Moving an appointment is allowed for the employee, the requestor
+  and EUSS.
+* **Audited:** bookings and moves are on the request timeline (and so in the audit trail);
+  `euss_slot_added`, `euss_slot_blocked`, `euss_slot_reopened`, `appointment_auto_match_failed`.
+* **Turn it off** with `APPOINTMENT_AUTO_MATCH=false`: requestors book every appointment (from the
+  slot list) as before.
+* **Checks:** `python services/backend/test_tracker.py` (43 offline) and
+  `services/backend/test_scheduling_db.py` (46 against a throwaway Postgres; see its docstring).
 
 ## Analytics: bottleneck and turnaround prediction
 
@@ -673,7 +729,9 @@ temporary password (`username`) with your own. To switch account, **Sign out** f
    **Personal Laptop** (8081) and **Account** (8082) resources — a laptop grant
    auto-provisions the account. If quota is exhausted, IT is prompted for an
    override justification.
-4. **`req`** → *My requests* → **Book** an appointment on that request.
+4. The appointment is **booked automatically** in the first free EUSS slot. Sign in as
+   **`alice`** → *My journey* shows every step, the appointment and what to bring (move it
+   to another slot there if you like). `req` can follow it with **Track**.
 5. **`euss`** → *Provision SN assets* → **Provision** (assigns e.g. `SN-1001`).
    Request is **Completed**.
 6. Try a **rejection**: raise another request and have `hr` **Reject** it — it
@@ -688,6 +746,97 @@ temporary password (`username`) with your own. To switch account, **Sign out** f
    `hr` → `director` → `aa` → `itadmin` as usual: alice moves to Sales with Sales' access, and
    the *Rotation tracker* shows her clock restarted. (If you already ran step 7 on alice, use
    frank for the rotation instead.)
+
+## Access review and reconciliation (first iteration)
+
+The **Access reviews** page gives IT Admin, the assigned Director (the department
+manager for this workflow) and EUSS one controlled certification workflow:
+
+1. Sign in as **`itadmin`**, open **Access reviews**, and create a campaign for one
+   department. Choose `director` as reviewer and a future due date. The campaign
+   snapshots the department standard, live entitlements, assigned assets and the
+   most recent completed request that supports each entitlement. Only one open
+   campaign is allowed per department; completed campaigns remain as history and
+   do not prevent a later review cycle.
+2. Sign out and sign in as **`director`**. Open the assigned campaign and record
+   **Certify access**, **Initiate return**, or **Investigate** for each row. Self-review is refused.
+   Reasons are mandatory for exceptions and investigations.
+3. Initiating a return creates an automated, linked **return** request. It follows the
+   normal HR → Director → AA → IT → appointment → EUSS flow; access is not removed until
+   EUSS retrieves the asset. Any Requestor can book its appointment because the automated
+   access-review actor cannot sign in.
+4. For the demo, certify Bob's account and initiate return for Alice's laptop. Take
+   Alice's linked return request through the normal approvals, book its appointment as
+   `req`, then have **`euss`** retrieve it.
+5. Sign in as **`itadmin`**. Resolve any investigations (a grant still has to use the
+   normal request workflow), run reconciliation, download the CSV evidence, then
+   complete the campaign. Completion is blocked while a decision or remediation is
+   outstanding. All important actions are written to **Audit trail**.
+
+Reconciliation refreshes changed evidence and returns unexpected drift to the
+Director. Changes caused by an approved revoke or its asset collection retain the
+original review decision.
+
+## Personal-data document protection and retention
+
+Supporting PDFs are quarantined and scanned by the backend before an approver can
+open them. Text PDFs are checked for checksum-valid NRIC/FIN values, Singapore phone
+numbers, e-mail addresses and likely postal addresses. Matches are removed with true
+PDF redactions; the original bytes are replaced by the protected derivative. Image-only
+and mixed-image pages are OCR-scanned with Tesseract, redacted using word coordinates,
+flattened so the source pixels are removed, then OCR-checked again. OCR results below the
+configured confidence threshold fail closed as **review required**.
+
+The request detail page shows `pending`, `clean`, `redacted`, `review required`,
+`failed` or `purged`. HR cannot approve while a document is unsafe. When a request is
+completed or rejected, its outcome policy starts the retention clock. The background
+worker deletes due content unless an audited legal hold is active, while retaining hashes,
+detection counts, timestamps and tamper-evident audit events. IT Admin's **Privacy review**
+page shows scan statistics, exceptions, retention policies, deadlines and legal holds.
+
+The POC default is 30 days. For a deterministic approval-gate and two-minute purge
+demonstration, put the following in `.env`, then recreate the backend:
+
+```env
+DOCUMENT_SCAN_INTERVAL_SECONDS=3
+DOCUMENT_MIN_QUARANTINE_SECONDS=30
+DOCUMENT_PURGE_INTERVAL_SECONDS=10
+DOCUMENT_OCR_DPI=200
+DOCUMENT_OCR_MIN_CONFIDENCE=60
+```
+
+The scan interval controls how often the worker checks; the minimum quarantine is the
+setting that guarantees approval remains blocked for 30 seconds. The seeded POC policies
+retain completed-request documents for 300 seconds and rejected-request documents for 120
+seconds; IT Admin can edit them on the dashboard. Production values must come from MND's
+approved records schedule.
+
+Generate both safe test fixtures with:
+
+```powershell
+python scripts/generate_pdpa_test_pdf.py
+```
+
+It writes:
+
+- `output/pdf/pdpa-synthetic-test-document.pdf`, a searchable PDF that is automatically redacted;
+- `output/pdf/pdpa-image-only-test-document.pdf`, a scanned-style PDF that is OCR-redacted.
+
+### Document privacy exception workflow
+
+Low-confidence OCR, failed scans and failed redaction verification remain quarantined and
+appear under **Privacy review** for IT Admin. The original cannot be downloaded through
+the normal request route. IT Admin can retry the protected scan, request a replacement from
+the owning Requestor, upload a sanitised replacement, or remove an unsafe copy with a
+mandatory justification. Replacements return to quarantine and must pass scanning before
+HR approval becomes available. Removal deletes the unsafe stored bytes but keeps the request
+blocked in `replacement requested` until a safe replacement passes scanning. The filename,
+reason, reviewer, timestamp and append-only audit evidence are retained.
+
+IT Admin may apply a legal hold to any retained closed-request document with a mandatory
+reason. Due content remains available while held. Releasing the hold also requires a reason;
+if its deadline has passed, the next purge cycle deletes the content. Policy changes and both
+hold actions are recorded in the append-only audit trail.
 
 ## Live session termination
 
@@ -740,15 +889,34 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | GET | `/api/requests/mine`, `/api/requests/queue` | any auth (role-scoped) |
 | GET | `/api/requests`, `/api/requests/{id}` | admin / owner+staff |
 | POST | `/api/requests/{id}/approve` | hr, director, aa (their stage) |
+| GET | `/api/privacy-documents` | it_admin — documents awaiting privacy action |
+| GET | `/api/privacy-dashboard` | it_admin — statistics, policies, retention and holds |
+| POST | `/api/privacy-documents/{id}/retry`, `/request-replacement`, `/remove` | it_admin |
+| POST | `/api/privacy-documents/{id}/replace` | it_admin or the owning requestor |
+| POST | `/api/privacy-documents/{id}/legal-hold`, `/legal-hold/release` | it_admin |
+| POST | `/api/privacy-retention-policies/{completed\|rejected}` | it_admin |
 | POST | `/api/requests/{id}/reject` | approver/it at their stage |
 | POST | `/api/requests/{id}/process` | it_admin (grants access) |
-| POST | `/api/requests/{id}/appointment` | requestor (owner) |
+| POST | `/api/requests/{id}/appointment` | requestor (owner) — `{"slot_id":…}`, `{"auto":true}` or legacy `{"appointment_at":…}` |
+| GET | `/api/tracker/me` | any auth — the journey tracker for requests about the caller |
+| GET | `/api/requests/{id}/tracker` | the employee it is about, its requestor, staff |
+| GET | `/api/requests/{id}/slots` | employee, requestor, euss — free slots + the suggested one |
+| POST | `/api/requests/{id}/reschedule` | employee, requestor, euss — `{"slot_id":…}` |
+| GET | `/api/euss/slots?days=7` | euss, admin — the slot board |
+| POST | `/api/euss/slots` | euss — add a slot `{"starts_at","minutes","capacity"}` |
+| POST | `/api/euss/slots/{id}/block` \| `/reopen` | euss — block (`{"reason":…}`, moves bookings) / re-open |
 | POST | `/api/requests/{id}/provision` | euss (grant) |
 | POST | `/api/requests/{id}/retrieve` | euss (return → revokes access) |
 | GET | `/api/rotations` | director, hr — everyone on the MJR clock, with state |
 | POST | `/api/rotations/{employee_id}/decision` | director — `{"decision":"keep","reason":…}` or `{"decision":"rotate","department_id":…}` |
 | GET | `/api/rotations/planned` | requestor — rotate decisions waiting for a shift request |
 | POST | `/api/rotations/check` | hr — run the due check now (e-mails Directors) |
+| GET/POST | `/api/access-reviews` | it_admin creates; assigned director, IT and EUSS can view according to role |
+| POST | `/api/access-review-items/{id}/decision` | assigned director — certify, initiate a governed return, or investigate |
+| POST | `/api/access-review-items/{id}/resolve` | it_admin — close an investigation with evidence |
+| POST | `/api/access-review-asset-tasks/{id}/collect` | euss — confirm physical retrieval |
+| POST | `/api/access-reviews/{id}/reconcile` or `/close` | it_admin |
+| GET | `/api/access-reviews/{id}/export` | it_admin — CSV evidence export |
 | GET | `/api/journey?type=all\|grant\|return\|shift\|onboard` | hr, director, aa, it_admin, euss, admin — latest Analytics results |
 | POST | `/api/journey/refresh` | same roles — ask the analytics container to recompute now |
 | GET | `/api/quotas` | aa, it_admin, admin |

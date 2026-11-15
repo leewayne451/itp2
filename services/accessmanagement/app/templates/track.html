@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% import "_tracker.html" as trk with context %}
+{% block title %}Track request #{{ t.request_id }}{% endblock %}
+{% block content %}
+<p>
+  <a class="btn-link dark" href="{{ url_for('dashboard.index') }}">← Back</a>
+  {% if current_user.role != 'employee' %}· <a class="btn-link dark" href="{{ url_for('requests.detail', rid=t.request_id) }}">Full request details</a>{% endif %}
+</p>
+{{ trk.tracker_card(t) }}
+{% endblock %}

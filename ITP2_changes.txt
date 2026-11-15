@@ -5,6 +5,103 @@ and how it was verified. Newest entry at the top. Times are Singapore (SGT, UTC+
 
 
 -------------------------------------------------------------------------------
+[2026-11-13 19:55 SGT]  CHANGE 011 follow-up — Moving an appointment gave a 500 and an e-mail storm
+-------------------------------------------------------------------------------
+Problem (found in manual testing, test 2 "employee moves the appointment")
+  With real SMTP configured each e-mail takes a few seconds, and a move sent five of them
+  in the request thread (requestor and employee progress, a "You appointment_rescheduled"
+  confirmation to the employee, a fresh ACTION REQUIRED to every EUSS account, the
+  appointment e-mail). The console gave up after 15 s and showed 500 Internal Server Error,
+  although the move had worked. Re-submitting moved the appointment into the slot it already
+  had ("Moved from 10:30 to 10:30") and sent the whole set again.
+
+Fix
+  services/backend/app/scheduling.py  announce(): the employee gets ONE e-mail per booking or
+                                      move (the appointment e-mail); EUSS is alerted only on the
+                                      first booking; all e-mails are sent on a background thread,
+                                      so the click returns at once. _book(): moving into the slot
+                                      the request already holds is refused (409).
+  services/backend/app/core.py        add_event(notify_target=, background=); "appointment_
+                                      rescheduled" removed from the actor-confirmation list
+  services/backend/test_scheduling_db.py  +3 checks: one e-mail to the employee per move, no
+                                      EUSS re-alert, same-slot move refused. 46/46 pass;
+                                      test_tracker.py 43/43.
+
+-------------------------------------------------------------------------------
+[2026-11-13 SGT]  CHANGE 011 — New-hire journey tracker with smart appointment booking
+-------------------------------------------------------------------------------
+Summary
+  The employee a request is about gets a tracker like a parcel-delivery page: every step,
+  who it is waiting on (by name), an estimated date per step and for the whole request, and
+  the EUSS appointment with what to bring. Appointments are matched to free EUSS slots
+  automatically as soon as IT processes the request, so nobody has to arrange a time by
+  e-mail. The employee or requestor can move it to another free slot; when EUSS blocks a
+  slot, everyone in it is moved to the next free one and told.
+
+What changed
+  services/backend/app/tracker_logic.py  NEW, pure (no DB): EUSS roster -> slots, the slot
+                                      choice (free place, >= lead time, no clash with the
+                                      person's other appointment, bundled next to it when
+                                      possible, else earliest), what to bring per request
+                                      type, the tracker steps / owners / estimates, office-hours
+                                      rounding of estimates
+  services/backend/app/scheduling.py  NEW: roster top-up, free-slot query, atomic booking
+                                      (slot row locked: a slot can never go over capacity),
+                                      auto-book, reschedule, block / re-open with re-matching,
+                                      appointment e-mail, tracker data (uses the Analytics
+                                      stage statistics of CHANGE 007 when there is history)
+  services/backend/app/api/tracker.py NEW endpoints: /api/tracker/me, /api/requests/<id>/tracker,
+                                      /slots, /reschedule, /api/euss/slots (+ add, block, reopen)
+  services/backend/app/api/requests.py IT "Process" (grant, onboard, shift, return) now
+                                      auto-books a slot; with none free the request waits for the
+                                      requestor as before. /appointment accepts slot_id or auto
+                                      (appointment_at still accepted). Provision / retrieve close
+                                      the booking.
+  services/backend/app/core.py        add_event(notify_incoming=False): no "ACTION REQUIRED —
+                                      book an appointment" e-mail when the system has just booked it
+  services/backend/app/db.py          transaction() helper (several statements, one transaction)
+  services/backend/app/sql/schema.sql euss_slots, euss_bookings (one live booking per request)
+  services/backend/app/sql/seed.sql   non-login system account appointment-scheduler
+  services/backend/app/api/hr.py      new-hire welcome e-mail links My journey
+  services/accessmanagement/          views/tracker.py, templates my_journey.html, track.html,
+                                      _tracker.html; employees land on My journey; Track links on
+                                      request tables and details; requestor books from the slot
+                                      list; EUSS slot board (block / re-open / add) and appointment
+                                      column; tracker styles; date filters dday / hm
+  docker-compose.yml                  APPOINTMENT_AUTO_MATCH and EUSS_* roster settings (defaults)
+  README.md                           new section, workflow, try-it, API table, structure
+
+Decisions
+  - Slots are 30 min, Mon-Fri 09:00-12:00 / 14:00-17:00 SGT, 2 desks, opened 21 days ahead,
+    and a request is never booked less than 24 h after IT processes it (EUSS needs time to
+    prepare the laptop). All configurable.
+  - The automatic booking is recorded as the existing "appointment_booked" event (actor:
+    Appointment Scheduler (Automated)), so the Analytics pipeline needs no change. Moves are
+    "appointment_rescheduled", which the pipeline ignores; it reads the latest appointment_at.
+  - A slot's places count only bookings of requests still waiting for EUSS, so a request
+    closed any other way frees its place without extra code.
+  - Public holidays are not in the roster: EUSS blocks those slots (bookings move automatically).
+
+Verification
+  - services/backend/test_tracker.py: 43/43 offline checks (roster, matching, bundling, what to
+    bring, tracker steps / owners / estimates, rejection, completion, office hours).
+  - services/backend/test_scheduling_db.py against a throwaway Postgres 16 with the real schema
+    and seed (Keycloak, tokens and e-mail stubbed): 43/43 — onboard auto-booked inside EUSS hours
+    with the lead time, requestor not asked to book, employee e-mailed what to bring, EUSS told
+    once, tracker permissions, reschedule (and the lead-time refusal), block -> re-match + e-mail,
+    two threads racing for the last place (one wins), bundling a second request, provision
+    closes the booking, no free slot -> manual booking (suggested / chosen / legacy time), closed
+    request frees its place, EUSS-only slot endpoints.
+  - Console rendered against that backend (sign-in stubbed) and checked in a browser at desktop
+    and phone width: My journey (booked, waiting, rejected), Track page, requestor booking panel
+    (Book suggested slot -> booked, e-mail flash), employee Move my appointment, EUSS slot board
+    and Block. Every role's dashboard returns 200.
+  - scripts/test_sso.py and scripts/test_access_review_returns.py booked the appointment by hand
+    after IT processing; they now book only when the request is still waiting for one.
+  - Not tested: the full docker compose stack with Keycloak (no Docker daemon was available), so
+    those two scripts were not run either.
+
+-------------------------------------------------------------------------------
 [2026-11-08 SGT]  CHANGE 009 — Separation of duties: no self-approval
 -------------------------------------------------------------------------------
 Summary

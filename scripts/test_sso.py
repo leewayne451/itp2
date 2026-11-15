@@ -46,7 +46,9 @@ def main():
 
     # ------------------------------------------------------------------ accounts live in Keycloak
     print("-- accounts")
-    check("every employee has a Keycloak account", all(kc_user(u) for u in emps), [u for u in emps if not kc_user(u)])
+    login_emps = {u: e for u, e in emps.items() if e["role"] != "system"}
+    check("every login-capable employee has a Keycloak account", all(kc_user(u) for u in login_emps),
+          [u for u in login_emps if not kc_user(u)])
     check("staff roles are in Keycloak's 'staff' group (TOTP required), employees are not",
           all(kc_in_staff(u) == (e["role"] in STAFF) for u, e in emps.items() if e["status"] == "active"))
     check("the API does not expose Keycloak ids or credentials",
@@ -211,9 +213,10 @@ def main():
         print("(no employee without a laptop left — skipped the grant workflow; use a fresh stack)")
     else:
         ok = all(post(f"/api/requests/{rid}/approve", tok=T[u])[0] == 200 for u in ("hr", "director", "aa"))
-        ok = ok and post(f"/api/requests/{rid}/process", tok=T["itadmin"])[0] == 200
-        ok = ok and post(f"/api/requests/{rid}/appointment", {"appointment_at": "2030-01-07T10:00:00+08:00"},
-                         T["req"])[0] == 200
+        pc, pd = post(f"/api/requests/{rid}/process", tok=T["itadmin"])
+        ok = ok and pc == 200
+        if ok and pd.get("status") == "pending_appointment":   # no EUSS slot was free (CHANGE 011)
+            ok = post(f"/api/requests/{rid}/appointment", {"auto": True}, T["req"])[0] == 200
         assets = get("/api/assets", T["euss"])[1]
         free = {k: next((a["asset_tag"] for a in assets if a["kind"] == k and a["status"] == "available"), None)
                 for k in ("Laptop", "Account")}

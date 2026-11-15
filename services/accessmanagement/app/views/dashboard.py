@@ -1,8 +1,9 @@
 """The role-aware dashboard: one server-rendered page per role."""
-from flask import Blueprint, render_template, g
+from flask import Blueprint, render_template, g, redirect, url_for
 
 from . import login_required
 from ..backend_client import get_json
+from ..labels import to_sgt
 
 bp = Blueprint("dashboard", __name__)
 
@@ -23,15 +24,20 @@ def index():
         return _euss()
     if role == "admin":
         return _admin()
+    if role == "employee":           # new-hire journey tracker (CHANGE 011)
+        return redirect(url_for("tracker.my_journey"))
     return render_template("dashboard/no_role.html")
 
 
 def _requestor():
     employees = get_json("/api/employees", default=[])
     emps = [e for e in employees if e["role"] == "employee"]
+    to_book = get_json("/api/requests/queue", default=[]) or []
+    for r in to_book:   # free EUSS slots to pick from, plus the smart match's suggestion (CHANGE 011)
+        r["slots"] = get_json(f"/api/requests/{r['id']}/slots", params={"limit": 15}, default={}) or {}
     return render_template(
         "dashboard/requestor.html",
-        to_book=get_json("/api/requests/queue", default=[]),
+        to_book=to_book,
         onboarded=[e for e in emps if e["department_id"]],
         unonboarded=[e for e in emps if not e["department_id"]],
         services=get_json("/api/services", default=[]),
@@ -112,9 +118,16 @@ def _euss():
             r = dict(r)
             r["plan"] = _provision_plan(r, employees_by_id, services_by_id, assets)
             provisions.append(r)
+    by_appt = lambda r: r.get("appointment_at") or "9999"   # noqa: E731 — soonest appointment first
+    board = get_json("/api/euss/slots", params={"days": 7}, default={}) or {}
+    for s in board.get("slots", []):
+        local = to_sgt(s["starts_at"])
+        s["day"] = local.strftime("%Y-%m-%d")          # sortable group key
+        s["day_label"] = local.strftime("%a %d %b")
     return render_template(
         "dashboard/euss.html",
-        provisions=provisions, returns=returns, assets=assets,
+        provisions=sorted(provisions, key=by_appt), returns=sorted(returns, key=by_appt), assets=assets,
+        slot_board=board,
         history=get_json("/api/requests/history", default=[]),
     )
 
