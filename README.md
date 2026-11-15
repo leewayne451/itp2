@@ -805,16 +805,17 @@ next authorization check. Configure the poll interval with
 
 HR and IT Admin have a **Leaver offboarding** panel and may schedule an employee's
 cut-off in Singapore time. Only IT Admin may use **Emergency offboard** for immediate
-removal; both actions require a reason. At execution the backend marks the employee inactive first, advances the local
-token cut-off and requests Keycloak logout, revokes every entitlement, closes conflicting
-open requests and raises EUSS collection tasks for assigned physical assets. The local
+kill switch; both actions require a reason. At execution the backend marks the employee inactive first, advances the local
+token cut-off and requests Keycloak logout, closes conflicting open requests and raises one
+automated Return request. Entitlements remain recorded as recovery evidence until that
+request reaches EUSS, which retrieves the equipment and revokes the access. The local
 inactive status and token cut-off take effect even when Keycloak is unavailable; its
 disable/logout remains queued for retry.
 
 Scheduled cut-offs are checked every `OFFBOARDING_INTERVAL_SECONDS` (default `10`). They
 can be cancelled before execution. Completed offboarding is idempotent, cannot be undone
 through the Admin status toggle, and records the actor, trigger, reason, removed access,
-closed requests, session action and collection tasks in the tamper-evident audit trail.
+closed requests, session action and linked Return request in the tamper-evident audit trail.
 
 ## Personal-data document protection and retention
 

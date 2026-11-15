@@ -51,13 +51,13 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Collect assets after access removal</h2></div>
-  <p class="muted small">Digital access has already been revoked by expiry or offboarding. The asset remains assigned until EUSS physically receives it and confirms collection here.</p>
+  <div class="panel-head"><h2>Collect assets after access expiry</h2></div>
+  <p class="muted small">Time-bound digital access has already expired. The asset remains assigned until EUSS physically receives it and confirms collection here. Offboarding equipment appears separately under Retrieve SN assets through its Return request.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Raised</th><th>Employee</th><th>Department</th><th>Asset</th><th>Reason</th><th></th></tr></thead>
       <tbody>
-        {% if not collection_tasks %}<tr><td colspan="6" class="muted">No access-removed assets awaiting collection.</td></tr>{% endif %}
+        {% if not collection_tasks %}<tr><td colspan="6" class="muted">No expired-access assets awaiting collection.</td></tr>{% endif %}
         {% for t in collection_tasks %}
         <tr>
           <td class="small nowrap">{{ t.created_at | dday }}</td>

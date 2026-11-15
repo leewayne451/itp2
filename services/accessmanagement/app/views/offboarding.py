@@ -42,6 +42,6 @@ def emergency(emp_id):
     if resp.ok and resp.json().get("already_offboarded"):
         message = "Employee was already offboarded; no duplicate action was created."
     else:
-        message = "Emergency offboarding completed. Access and sessions were removed; EUSS collection tasks were raised."
+        message = "Emergency kill switch applied. Sessions ended and an automated Return request was raised for equipment recovery."
     flash(message if resp.ok else error_of(resp), "ok" if resp.ok else "error")
     return _back()

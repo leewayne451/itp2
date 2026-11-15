@@ -27,32 +27,40 @@ class OffboardingExecutionTests(unittest.TestCase):
         self.actor = {"id": 3, "username": "harper", "role": "hr"}
 
     @patch("app.offboarding.audit.record")
-    @patch("app.offboarding.access_lifecycle.create_collection_tasks", return_value=2)
+    @patch("app.offboarding._raise_return", return_value=(55, None))
     @patch("app.offboarding._close_open_requests", return_value=[11, 12])
-    @patch("app.offboarding.revoke_access", return_value=True)
     @patch("app.offboarding.sync.push", return_value=True)
     @patch("app.offboarding._employee")
     @patch("app.offboarding.db.query")
-    def test_emergency_cutoff_applies_every_control(self, query, employee, push, revoke,
-                                                    close, collections, audit):
+    def test_emergency_cutoff_keeps_evidence_and_raises_return(self, query, employee, push,
+                                                               close, raise_return, audit):
         employee.return_value = self.emp
         finished = datetime.now(timezone.utc)
         query.side_effect = [None, [{"service_id": 10}, {"service_id": 20}],
                              {"offboarded_at": finished}]
         result = offboarding.execute(7, "Contract ended", self.actor)
 
-        self.assertEqual(result["removed_service_ids"], [10, 20])
+        self.assertEqual(result["retained_service_ids"], [10, 20])
         self.assertEqual(result["closed_request_ids"], [11, 12])
-        self.assertEqual(result["collection_tasks_created"], 2)
+        self.assertEqual(result["return_request_id"], 55)
         self.assertTrue(result["signed_out_everywhere"])
         push.assert_called_once_with(7, end_sessions=True)
-        self.assertEqual(revoke.call_count, 2)
-        self.assertEqual(revoke.call_args_list[0].kwargs["audit_action"], "entitlement_offboarded")
         close.assert_called_once_with(7, self.actor, "Contract ended")
-        collections.assert_called_once_with(
-            7, actor=self.actor,
-            reason="Employee offboarded; EUSS must confirm physical collection")
+        raise_return.assert_called_once_with(self.emp, self.actor, "Contract ended", "emergency")
         self.assertEqual(audit.call_args.args[1], "employee_offboarded")
+
+    @patch("app.offboarding.db.query")
+    def test_existing_return_is_reused(self, query):
+        query.return_value = {"id": 88}
+        rid, note = offboarding._raise_return(self.emp, self.actor, "Leaving", "scheduled")
+        self.assertEqual(rid, 88)
+        self.assertIn("already open", note)
+
+    @patch("app.offboarding.db.query", side_effect=[None, []])
+    def test_no_return_is_created_without_held_access(self, _query):
+        rid, note = offboarding._raise_return(self.emp, self.actor, "Leaving", "scheduled")
+        self.assertIsNone(rid)
+        self.assertIn("nothing to return", note)
 
     @patch("app.offboarding.sync.push")
     @patch("app.offboarding._employee")

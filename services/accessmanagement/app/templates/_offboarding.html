@@ -1,6 +1,6 @@
 <section class="panel" id="offboarding">
   <div class="panel-head"><h2>Leaver offboarding</h2></div>
-  <p class="muted small">Schedule a cut-off in Singapore time. IT Admin may also use Emergency offboard for immediate removal. Both actions deactivate the employee, revoke all digital access, end sessions and raise EUSS collection tasks. A reason is mandatory.</p>
+  <p class="muted small">Schedule a cut-off in Singapore time. IT Admin may also use Emergency offboard for an immediate kill switch. Both actions deactivate the employee, end all sessions and raise one Return request. Entitlements remain as recovery evidence until EUSS receives the equipment and completes the return. A reason is mandatory.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Employee</th><th>Department</th><th>Status</th><th>Scheduled cut-off</th>{% if current_user.role == 'it_admin' %}<th>Emergency action</th>{% endif %}</tr></thead>

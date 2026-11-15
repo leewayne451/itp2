@@ -1,15 +1,16 @@
 """Immediate and scheduled leaver cut-off.
 
 The backend is authoritative, so setting the employee inactive and advancing the
-token cut-off blocks access even when Keycloak is unavailable. Physical custody is
-handled separately through the EUSS collection queue.
+token cut-off blocks access even when Keycloak is unavailable. Entitlements remain
+as recovery evidence until the automated Return request reaches EUSS, matching the
+existing HRMS resignation lifecycle.
 """
 import threading
 import time
 
-from . import access_lifecycle, audit, db, scheduling, sync
+from . import audit, db, scheduling, sync, workflows
 from .config import OFFBOARDING_INTERVAL_SECONDS
-from .core import add_event, revoke_access
+from .core import add_event, service_by_type, system_actor
 
 SYSTEM = {"id": None, "username": "scheduled-offboarding-worker", "role": "system"}
 
@@ -56,6 +57,7 @@ def cancel_schedule(emp_id, reason, actor):
 
 def _close_open_requests(emp_id, actor, reason):
     rows = db.query("""SELECT id FROM requests WHERE target_employee_id=%s
+                        AND type <> 'return'
                         AND status NOT IN ('completed','rejected') ORDER BY id""", (emp_id,))
     note = f"Closed by offboarding: {reason}"
     for row in rows:
@@ -65,6 +67,34 @@ def _close_open_requests(emp_id, actor, reason):
         scheduling.cancel_booking(row["id"])
         add_event(row["id"], actor.get("id"), "rejected", note, background=True)
     return [row["id"] for row in rows]
+
+
+def _raise_return(emp, actor, reason, trigger):
+    """Raise one automated Return request covering the leaver's held resources."""
+    existing = db.query(
+        """SELECT id FROM requests WHERE target_employee_id=%s AND type='return'
+             AND status NOT IN ('completed','rejected') ORDER BY id LIMIT 1""",
+        (emp["id"],), fetch="one")
+    if existing:
+        return existing["id"], "a return request was already open"
+
+    held = [row["service_id"] for row in db.query(
+        "SELECT service_id FROM employee_access WHERE employee_id=%s ORDER BY service_id",
+        (emp["id"],))]
+    if not held:
+        return None, "no access held, so nothing to return"
+    automation = system_actor()
+    if not automation:
+        raise RuntimeError("HR-system automation account is missing")
+    account = service_by_type("account")
+    service_id = account["id"] if account and account["id"] in held else held[0]
+    justification = (f"Raised automatically by {trigger} offboarding, initiated by "
+                     f"{actor.get('username') or 'system'}: {reason}")
+    rid, error = workflows.raise_return(automation["id"], emp, service_id,
+                                        justification + " — leaver: return laptop and account")
+    if error:
+        raise RuntimeError(f"could not raise the return request: {error}")
+    return rid, None
 
 
 def execute(emp_id, reason, actor, trigger="emergency"):
@@ -85,15 +115,8 @@ def execute(emp_id, reason, actor, trigger="emergency"):
 
     services = [r["service_id"] for r in db.query(
         "SELECT service_id FROM employee_access WHERE employee_id=%s ORDER BY service_id", (emp_id,))]
-    removed = []
-    for service_id in services:
-        if revoke_access(emp_id, service_id, audit_action="entitlement_offboarded",
-                         audit_details={"reason": reason, "trigger": trigger}, actor=actor):
-            removed.append(service_id)
-
     closed = _close_open_requests(emp_id, actor, reason)
-    collections = access_lifecycle.create_collection_tasks(
-        emp_id, actor=actor, reason="Employee offboarded; EUSS must confirm physical collection")
+    return_request, return_note = _raise_return(emp, actor, reason, trigger)
     row = db.query(
         """UPDATE employees SET offboarded_at=now(),offboarded_by_id=%s,
                    offboard_reason=%s,offboard_trigger=%s
@@ -101,9 +124,9 @@ def execute(emp_id, reason, actor, trigger="emergency"):
         (actor.get("id"), reason, trigger, emp_id), fetch="one")
     finished_at = row["offboarded_at"] if row else _employee(emp_id)["offboarded_at"]
     details = {"trigger": trigger, "reason": reason, "previous_status": previous_status,
-               "removed_service_ids": removed, "closed_request_ids": closed,
-               "collection_tasks_created": collections, "signed_out_everywhere": True,
-               "keycloak_synced": keycloak_synced}
+               "retained_service_ids": services, "closed_request_ids": closed,
+               "return_request_id": return_request, "return_note": return_note,
+               "signed_out_everywhere": True, "keycloak_synced": keycloak_synced}
     audit.record("access", "employee_offboarded", actor=actor, target_type="employee",
                  target_id=emp_id, target_label=emp["username"], details=details)
     return {"employee_id": emp_id, "offboarded_at": finished_at.isoformat(), **details}
