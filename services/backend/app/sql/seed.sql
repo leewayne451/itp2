@@ -190,6 +190,24 @@ WHERE username = 'appointment-scheduler';
 -- Default email for every account that lacks one (admin can edit these later).
 UPDATE employees SET email = username || '@servicejourney.local' WHERE email IS NULL;
 
+-- ---------------------------------------------------------------- demand forecasting demo
+-- Historical planning signals only: these rows never enter the HRMS webhook or
+-- create requests. Their dates move with the seed so the 90-day forecast is useful
+-- on a newly created demo database.
+INSERT INTO demand_forecast_demo_events (demo_key, event_type, department_id, source_department_id, occurred_at)
+SELECT v.demo_key, v.event_type,
+       (SELECT id FROM departments WHERE name=v.department),
+       (SELECT id FROM departments WHERE name=v.source_department),
+       now() - v.ago::interval
+FROM (VALUES
+    ('forecast-demo-eng-hire-1',       'hire',     'Engineering',     NULL,          '12 days'),
+    ('forecast-demo-eng-hire-2',       'hire',     'Engineering',     NULL,          '28 days'),
+    ('forecast-demo-eng-hire-3',       'hire',     'Engineering',     NULL,          '55 days'),
+    ('forecast-demo-sales-to-eng',     'transfer', 'Engineering',     'Sales',       '42 days'),
+    ('forecast-demo-eng-to-hr',        'transfer', 'Human Resources', 'Engineering', '68 days')
+) AS v(demo_key, event_type, department, source_department, ago)
+WHERE NOT EXISTS (SELECT 1 FROM demand_forecast_demo_events f WHERE f.demo_key=v.demo_key);
+
 -- ------------------------------------------------------------- demo credentials
 -- Every seeded account starts with a TEMPORARY password equal to its username,
 -- given here only as an Argon2id hash. On first start the backend moves these

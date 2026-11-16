@@ -547,6 +547,29 @@ a shortage of stock.
   it may proceed but **must enter a justification**, which is recorded on the
   request's timeline (visible to IT) for the audit trail.
 
+### Demand forecasting for laptops and accounts
+
+The **IT Admin** dashboard includes a read-only **Demand forecast** panel for planning
+resource capacity before quota overrides are needed. It projects each department's next
+90 days of laptop and account demand from the previous 90 days of processed HR hires and
+transfers. A hire adds demand to its destination department; a transfer adds demand to the
+destination and removes it from the source. The department service mapping translates that
+net headcount trend into resource demand, and a Laptop always carries its dependent Account.
+
+The panel compares projected demand with department and organisation quotas, shows available
+asset stock, and recommends quota increases or procurement quantities. It is advisory only:
+it never changes a quota, purchases an asset, or bypasses the existing AA proposal → IT Admin
+approval flow.
+
+Fresh demos include clearly labelled synthetic forecast-only trend events so the panel is
+useful immediately. They live separately from HRMS events and cannot create employees or
+workflow requests. Real processed HRMS events are automatically included as they arrive.
+
+**Demo:** sign in as `itadmin` and open the dashboard. Engineering's projected hiring trend
+shows a department capacity gap; the organisation section identifies any wider quota or stock
+shortfall. Run `python services/backend/test_demand_forecast.py` for five offline checks, or
+`python scripts/test_demand_forecast.py` against the running stack.
+
 ## Audit trail
 
 A single, **append-only, tamper-evident** record of every security-relevant event, kept
@@ -965,6 +988,7 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | GET | `/api/access-reviews/{id}/export` | it_admin — CSV evidence export |
 | GET | `/api/journey?type=all\|grant\|return\|shift\|onboard` | hr, director, aa, it_admin, euss, admin — latest Analytics results |
 | POST | `/api/journey/refresh` | same roles — ask the analytics container to recompute now |
+| GET | `/api/demand-forecast` | it_admin — advisory 90-day laptop/account demand projection from HR trends |
 | GET | `/api/quotas` | aa, it_admin, admin |
 | POST | `/api/quota-requests` | aa (propose new limit) |
 | GET | `/api/quota-requests` | aa, it_admin, admin |
