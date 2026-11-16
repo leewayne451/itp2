@@ -59,6 +59,47 @@
 </section>
 
 <section class="panel">
+  <div class="panel-head"><h2>Demand forecast</h2></div>
+  {% set fc = demand_forecast or {} %}
+  <p class="muted small">Advisory 90-day projection from the previous {{ fc.lookback_days or 90 }} days of processed HR hires and transfers. It does not change quotas or procure assets.</p>
+  <p class="small {% if fc.demo_data_included %}muted{% endif %}">
+    {{ fc.real_event_count or 0 }} real HR event(s){% if fc.demo_data_included %} + {{ fc.demo_event_count }} clearly labelled demo trend event(s){% endif %} used.
+    {% if not fc.real_event_count and not fc.demo_data_included %}No trend data is available yet.{% endif %}
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Department</th><th>Net people trend</th><th>Resource</th><th>Current</th><th>Projected change</th><th>Projected demand</th><th>Quota</th><th>Recommended action</th></tr></thead>
+      <tbody>
+        {% for d in fc.departments or [] %}
+          {% for r in d.resources %}
+          <tr>
+            {% if loop.first %}<td rowspan="{{ d.resources|length }}">{{ d.department_name }}</td><td rowspan="{{ d.resources|length }}">{{ '%+d'|format(d.projected_net_headcount) }}</td>{% endif %}
+            <td>{{ r.name }}</td><td>{{ r.current_used }}</td><td>{{ '%+d'|format(r.projected_change) }}</td><td>{{ r.projected_demand }}</td><td>{{ r.department_quota }}</td>
+            <td>{% if r.quota_gap %}<span class="pill bad">Increase department quota by {{ r.quota_gap }} → {{ r.recommended_department_quota }}</span>{% else %}<span class="pill ok">Within department quota</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        {% else %}<tr><td colspan="8" class="muted">Forecast data is not available.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <h3>Organisation capacity and procurement</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Resource</th><th>Current</th><th>Projected demand</th><th>Organisation quota</th><th>Available stock</th><th>Recommendation</th></tr></thead>
+      <tbody>
+        {% for r in fc.organisation or [] %}
+        <tr><td>{{ r.name }}</td><td>{{ r.current_used }}</td><td>{{ r.projected_demand }}</td><td>{{ r.organisation_quota }}</td><td>{{ r.available_assets }}</td>
+          <td>
+            {% if r.quota_gap %}<span class="pill bad">Plan quota +{{ r.quota_gap }} → {{ r.recommended_organisation_quota }}</span>{% else %}<span class="pill ok">Quota covered</span>{% endif %}
+            {% if r.procurement_needed %}<div class="small"><span class="pill bad">Procure {{ r.procurement_needed }}</span></div>{% else %}<div class="small muted">Available stock covers projected additions</div>{% endif %}
+          </td></tr>
+        {% else %}<tr><td colspan="6" class="muted">No resource forecast is available.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
   <div class="panel-head"><h2>Department quotas</h2></div>
   <p class="muted small">How many laptops and accounts each department may hold. You manage these
     directly. A grant is checked against <em>both</em> the department quota and the

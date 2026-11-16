@@ -83,6 +83,7 @@ def _it_admin():
         quotas=get_json("/api/quotas", default=[]),
         quota_requests=get_json("/api/quota-requests", default=[]),
         department_quotas=get_json("/api/department-quotas", default=[]),
+        demand_forecast=get_json("/api/demand-forecast", default={}),
         offboarding_employees=[e for e in get_json("/api/employees", default=[])
                                if e["role"] == "employee"],
     )

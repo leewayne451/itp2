@@ -490,6 +490,20 @@ CREATE TABLE IF NOT EXISTS hr_events (
 );
 CREATE INDEX IF NOT EXISTS hr_events_received ON hr_events (received_at DESC);
 
+-- Synthetic, clearly isolated trend inputs for the capacity-planning demonstration.
+-- These are not HRMS events and cannot create employees or workflow requests.
+CREATE TABLE IF NOT EXISTS demand_forecast_demo_events (
+    id                   SERIAL PRIMARY KEY,
+    demo_key             TEXT NOT NULL UNIQUE,
+    event_type           TEXT NOT NULL CHECK (event_type IN ('hire','transfer')),
+    department_id        INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+    source_department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+    occurred_at          TIMESTAMPTZ NOT NULL,
+    CHECK (event_type = 'hire' OR source_department_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS demand_forecast_demo_events_occurred
+    ON demand_forecast_demo_events (occurred_at DESC);
+
 -- --------------------------------------------------------------------------- --
 -- New-hire journey tracker + smart appointment booking  (CHANGE 011)
 -- --------------------------------------------------------------------------- --
