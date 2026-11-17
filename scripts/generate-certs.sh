@@ -12,7 +12,10 @@
 #   certs/server.crt  the certificate every service presents
 #   certs/server.key  its private key
 #
-# Re-run at any time to rotate; then: docker compose up -d --force-recreate
+# Re-run at any time to reissue the server certificate; then:
+#     docker compose up -d --force-recreate
+# An existing CA is KEPT, so browsers that already trust certs/ca.crt keep working.
+# To rotate the CA as well:  NEW_CA=1 bash scripts/generate-certs.sh
 # ---------------------------------------------------------------------------
 set -euo pipefail
 export MSYS_NO_PATHCONV=1   # stop Git Bash rewriting the -subj argument
@@ -23,12 +26,16 @@ cd certs
 
 DAYS=825   # under the 825-day limit browsers enforce on leaf certificates
 
-echo "==> Certificate Authority"
-openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
-  -keyout ca.key -out ca.crt \
-  -subj "/O=ServiceJourney/CN=ServiceJourney Local Dev CA" \
-  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+if [[ -f ca.key && -f ca.crt && "${NEW_CA:-0}" != "1" ]]; then
+  echo "==> Certificate Authority: keeping the existing certs/ca.crt"
+else
+  echo "==> Certificate Authority"
+  openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+    -keyout ca.key -out ca.crt \
+    -subj "/O=ServiceJourney/CN=ServiceJourney Local Dev CA" \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+fi
 
 echo "==> Server key + signing request"
 openssl req -newkey rsa:2048 -sha256 -nodes \
@@ -36,7 +43,8 @@ openssl req -newkey rsa:2048 -sha256 -nodes \
   -subj "/O=ServiceJourney/CN=localhost" 2>/dev/null
 
 # Names the certificate must be valid for. The docker service names matter as
-# much as localhost: container-to-container calls use https://backend:5000 etc.
+# much as localhost: container-to-container calls use https://backend:5000 etc.,
+# and database clients verify-full against 'postgres' / 'keycloak-db' (TLS on SQL/JDBC).
 cat > san.cnf <<'EOF'
 subjectAltName = @alt
 extendedKeyUsage = serverAuth
@@ -52,6 +60,8 @@ DNS.5 = service1
 DNS.6 = service2
 DNS.7 = postgres
 DNS.8 = keycloak
+DNS.9 = keycloak-db
+DNS.10 = hrms
 IP.1  = 127.0.0.1
 IP.2  = ::1
 EOF

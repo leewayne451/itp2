@@ -668,10 +668,11 @@ Everything speaks **HTTPS** — the pages you open in a browser *and* the calls 
 containers make to each other. Traffic is both encrypted and **authenticated**: no
 service is configured with `verify=False`.
 
-The repo ships a small private Certificate Authority. Regenerate or rotate it with:
+The repo ships a small private Certificate Authority. Reissue the server certificate with:
 
 ```bash
-bash scripts/generate-certs.sh
+bash scripts/generate-certs.sh          # keeps the existing CA (browsers keep trusting it)
+NEW_CA=1 bash scripts/generate-certs.sh # also rotates the CA (re-import ca.crt afterwards)
 ```
 
 That produces `certs/`:
@@ -686,7 +687,7 @@ One certificate covers every name in play, so the same file works for the browse
 for container-to-container calls:
 
 ```
-DNS: localhost, backend, email, accessmanagement, service1, service2, postgres, keycloak
+DNS: localhost, backend, email, accessmanagement, service1, service2, postgres, keycloak-db, hrms, keycloak
 IP : 127.0.0.1, ::1
 ```
 
@@ -710,10 +711,35 @@ does not have (`CERT_TRUST_REVOCATION_STATUS_UNKNOWN`). Add `--ssl-no-revoke`:
 curl --ssl-no-revoke --cacert certs/ca.crt https://localhost:5000/health
 ```
 
-> **Not covered:** the backend↔Postgres link. Postgres does not speak HTTPS — it has its
-> own TLS on the wire — so it is still an unencrypted connection on the internal network.
-> Enabling it means mounting the key into the Postgres container with `0600`/`postgres`
-> ownership and setting `sslmode=require`.
+### Non-HTTP links are encrypted too
+
+Every container-to-container connection is TLS, verified against `certs/ca.crt`:
+
+| Link | Protocol | How |
+|------|----------|-----|
+| backend → postgres, analytics → postgres | PostgreSQL + TLS 1.2+ | server `ssl=on`; clients `PGSSLMODE=verify-full`, `PGSSLROOTCERT=/certs/ca.crt` |
+| keycloak → keycloak-db | JDBC + TLS 1.2+ | `KC_DB_URL=...?sslmode=verify-full&sslrootcert=/certs/ca.crt` |
+| keycloak → email (account e-mails, port 1025) | SMTP + STARTTLS (required) | realm `smtpServer.starttls=true`; the listener answers `530 Must issue a STARTTLS command first` to plaintext |
+| everything else | HTTPS | as above |
+
+Both PostgreSQL servers start through a small wrapper (`x-postgres-tls` in
+`docker-compose.yml`) that copies the key in with `0600`/`postgres` ownership (a read-only
+Windows bind mount cannot provide that) and uses a generated `pg_hba.conf` that accepts TCP
+clients **only** over TLS (`hostssl ... scram-sha-256`) and rejects plaintext (`hostnossl ...
+reject`). The local socket stays available for the health check.
+
+Check it on a running stack:
+
+```bash
+docker compose exec postgres psql -U accessmgmt -d accessmgmt -c "SELECT a.usename, s.ssl, s.version FROM pg_stat_ssl s JOIN pg_stat_activity a USING (pid) WHERE a.client_addr IS NOT NULL"
+docker compose exec keycloak-db psql -U keycloak -d keycloak -c "SELECT a.usename, s.ssl, s.version FROM pg_stat_ssl s JOIN pg_stat_activity a USING (pid) WHERE a.client_addr IS NOT NULL"
+```
+
+> **Upgrading an existing stack:** run `bash scripts/generate-certs.sh` (adds `keycloak-db`
+> to the certificate, keeps the CA), then `docker compose up -d --build`. The realm file is
+> imported only on a fresh Keycloak database, so switch the already-imported realm to
+> STARTTLS once: Keycloak admin console → realm *servicejourney* → Realm settings → Email →
+> *Enable StartTLS* (or `docker compose down -v` for a clean demo state).
 
 ## Running it
 

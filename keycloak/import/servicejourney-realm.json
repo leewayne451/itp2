@@ -47,7 +47,7 @@
     "from": "noreply@servicejourney.local",
     "fromDisplayName": "ServiceJourney",
     "ssl": "false",
-    "starttls": "false",
+    "starttls": "true",
     "auth": "false"
   },
   "clients": [

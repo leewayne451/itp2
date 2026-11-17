@@ -20,16 +20,51 @@
 # Sign-in for every app goes through Keycloak (https://localhost:8443). Only the
 # backend talks to the app database. The three frontends talk to the backend
 # over the internal 'appnet' network; browsers reach them via the host ports below.
+#
+# Encryption in transit: EVERY container-to-container link is TLS, verified against
+# certs/ca.crt — HTTPS between the apps, TLS on both PostgreSQL servers (clients use
+# sslmode=verify-full; plaintext TCP is refused by pg_hba), and STARTTLS (required)
+# on the Keycloak -> email SMTP relay.
+
+# Both PostgreSQL servers start through this wrapper. PostgreSQL refuses a private key
+# that is not 0600 and owned by its user, which a read-only (Windows) bind mount cannot
+# provide, so the key is copied into the container with the right owner and mode first.
+# The generated pg_hba.conf allows TCP clients ONLY over TLS (hostssl) with SCRAM
+# passwords and rejects plaintext (hostnossl); the local socket is used for health checks.
+x-postgres-tls: &postgres-tls
+  entrypoint:
+    - sh
+    - -ec
+    - |
+      d=/var/lib/postgresql/tls
+      mkdir -p "$$d"
+      cp /certs/server.crt "$$d/server.crt"
+      cp /certs/server.key "$$d/server.key"
+      printf '%s\n' \
+        'local     all all     trust' \
+        'hostssl   all all all scram-sha-256' \
+        'hostnossl all all all reject' > "$$d/pg_hba.conf"
+      chown -R postgres:postgres "$$d"
+      chmod 0600 "$$d/server.key"
+      exec docker-entrypoint.sh postgres \
+        -c ssl=on \
+        -c ssl_cert_file="$$d/server.crt" \
+        -c ssl_key_file="$$d/server.key" \
+        -c ssl_min_protocol_version=TLSv1.2 \
+        -c password_encryption=scram-sha-256 \
+        -c hba_file="$$d/pg_hba.conf"
 
 services:
   postgres:
     image: postgres:16-alpine
+    <<: *postgres-tls
     environment:
       POSTGRES_DB: accessmgmt
       POSTGRES_USER: accessmgmt
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python scripts/generate_secrets.py}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./certs:/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U accessmgmt -d accessmgmt"]
       interval: 5s
@@ -48,6 +83,10 @@ services:
       PGDATABASE: accessmgmt
       PGUSER: accessmgmt
       PGPASSWORD: ${POSTGRES_PASSWORD:?run python scripts/generate_secrets.py}
+      # TLS to PostgreSQL (read by libpq for every connection, owner and runtime role):
+      # encrypted, and the server must present a certificate for 'postgres' from our CA.
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /certs/ca.crt
       # Least-privilege runtime DB role: SELECT + INSERT only on audit_log.
       APP_DB_USER: sj_app
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run python scripts/generate_secrets.py}
@@ -126,6 +165,7 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_TLS: ${SMTP_TLS:-true}
       SMTP_LISTEN_PORT: "1025"   # Keycloak relays its account e-mails here (internal network only)
+      SMTP_LISTEN_REQUIRE_TLS: "true"   # STARTTLS with certs/server.crt is mandatory before MAIL
     ports:
       # Mailbox web page (https://localhost:8090) for the demo: the MJR alerts, request
       # notifications and Keycloak e-mails land here. Bound to 127.0.0.1 ONLY, because the
@@ -138,10 +178,14 @@ services:
   # the journey_* tables, which the backend serves to the console's "Analytics" page.
   analytics:
     build: ./services/analytics
+    volumes:
+      - ./certs:/certs:ro         # CA used to verify the database's TLS certificate
     environment:
       PGHOST: postgres
       PGPORT: "5432"
       PGDATABASE: accessmgmt
+      PGSSLMODE: verify-full      # TLS to PostgreSQL, server certificate verified
+      PGSSLROOTCERT: /certs/ca.crt
       ANALYTICS_DB_USER: sj_analytics
       ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?run python scripts/generate_secrets.py}
       ANALYTICS_INTERVAL_SECONDS: ${ANALYTICS_INTERVAL_SECONDS:-60}
@@ -179,12 +223,14 @@ services:
 
   keycloak-db:
     image: postgres:16-alpine
+    <<: *postgres-tls
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
       POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run python scripts/generate_secrets.py}
     volumes:
       - kcdata:/var/lib/postgresql/data
+      - ./certs:/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
       interval: 5s
@@ -200,7 +246,8 @@ services:
     command: ["start", "--import-realm"]
     environment:
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      # JDBC over TLS: encrypted, and the certificate must be valid for 'keycloak-db' (our CA).
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak?sslmode=verify-full&sslrootcert=/certs/ca.crt
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run python scripts/generate_secrets.py}
       # Browsers use https://localhost:8443 (also the token issuer); containers call

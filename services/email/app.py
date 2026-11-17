@@ -158,11 +158,33 @@ class _KeycloakMailHandler:
         return "250 Message accepted for delivery"
 
 
+SMTP_LISTEN_REQUIRE_TLS = os.environ.get("SMTP_LISTEN_REQUIRE_TLS", "true").strip().lower() != "false"
+
+
+def smtp_tls_context():
+    """Server-side TLS for the Keycloak relay: STARTTLS with the same certificate the
+    HTTPS endpoints present (valid for 'email', signed by certs/ca.crt)."""
+    if not (os.path.exists(TLS_CERT) and os.path.exists(TLS_KEY)):
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+    return ctx
+
+
 def start_smtp_listener():
     from aiosmtpd.controller import Controller
-    controller = Controller(_KeycloakMailHandler(), hostname="0.0.0.0", port=SMTP_LISTEN_PORT)
+    tls = smtp_tls_context()
+    if tls is None and SMTP_LISTEN_REQUIRE_TLS:
+        raise RuntimeError("SMTP_LISTEN_REQUIRE_TLS is on but the TLS certificate is missing")
+    # require_starttls: every command except EHLO/HELO/NOOP/QUIT/STARTTLS is refused
+    # until the session is encrypted, so mail can never cross the network in clear.
+    controller = Controller(_KeycloakMailHandler(), hostname="0.0.0.0", port=SMTP_LISTEN_PORT,
+                            tls_context=tls, require_starttls=SMTP_LISTEN_REQUIRE_TLS)
     controller.start()
-    print(f"[email] SMTP listener for Keycloak on port {SMTP_LISTEN_PORT}", flush=True)
+    print(f"[email] SMTP listener for Keycloak on port {SMTP_LISTEN_PORT} "
+          f"(STARTTLS {'required' if SMTP_LISTEN_REQUIRE_TLS else 'offered' if tls else 'unavailable'})",
+          flush=True)
     return controller
 
 
