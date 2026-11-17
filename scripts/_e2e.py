@@ -157,8 +157,10 @@ def _form_action(text, form_id):
 
 
 def _page_error(text):
+    # the message text itself (not the whitespace before a nested element, which an
+    # outer <div id="input-error-username"> would otherwise match first)
     m = re.search(r'(?:kc-feedback-text|input-error[^"]*|pf-v5-c-helper-text__item-text|alert-error[^"]*)"[^>]*>'
-                  r'\s*([^<]{3,})', text)
+                  r'\s*([^<\s][^<]{2,})', text)
     return html.unescape(m.group(1).strip()) if m else "rejected"
 
 
@@ -218,29 +220,83 @@ def _drive(b, r, acct, new_password, stop_at=None):
     return r, steps + ["ERROR: too many steps"]
 
 
-def tokens_for(acct, client="console", new_password=None, prompt=None, b=None):
-    """Sign in to `client` through Keycloak's pages and get its tokens (authorization
-    code + PKCE, exchanged by us instead of the app). Returns (tokens|None, steps)."""
+def begin_sign_in(client="console", prompt=None, b=None, **extra):
+    """Open Keycloak's authorization endpoint for `client` (code + PKCE). Returns
+    (browser, first_response, ctx); `extra` adds parameters such as kc_action."""
     b = b or browser()
     redirect = APPS[client] + "/callback"
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     params = {"client_id": client, "response_type": "code", "scope": "openid", "redirect_uri": redirect,
               "state": secrets.token_urlsafe(8), "nonce": secrets.token_urlsafe(8),
-              "code_challenge": challenge, "code_challenge_method": "S256"}
+              "code_challenge": challenge, "code_challenge_method": "S256", **extra}
     if prompt:
         params["prompt"] = prompt
     r = b.get(OIDC + "/auth", params=params, allow_redirects=False)
-    r, steps = _drive(b, r, acct, new_password, stop_at=redirect)
+    return b, r, {"client": client, "redirect": redirect, "verifier": verifier}
+
+
+def follow(b, r, stop_at=None):
+    """Follow redirects until a page is shown (or the app's `stop_at` callback is reached)."""
+    for _ in range(10):
+        if not r.is_redirect:
+            return r
+        loc = urllib.parse.urljoin(r.url, r.headers["Location"])
+        if stop_at and loc.startswith(stop_at):
+            r.headers["Location"] = loc
+            return r
+        r = b.get(loc, allow_redirects=False)
+    return r
+
+
+def exchange_code(b, r, ctx):
+    """Swap the authorization code in the app-callback redirect `r` for tokens."""
     if not r.is_redirect:
-        return None, steps
+        return None
     q = urllib.parse.parse_qs(urllib.parse.urlparse(r.headers["Location"]).query)
     if "code" not in q:
-        return None, steps + [f"ERROR: {q.get('error')}"]
+        return None
     tok = b.post(OIDC + "/token", data={"grant_type": "authorization_code", "code": q["code"][0],
-                                        "redirect_uri": redirect, "client_id": client,
-                                        "client_secret": OIDC_SECRETS[client], "code_verifier": verifier}).json()
-    return (tok if "access_token" in tok else None), steps
+                                        "redirect_uri": ctx["redirect"], "client_id": ctx["client"],
+                                        "client_secret": OIDC_SECRETS[ctx["client"]],
+                                        "code_verifier": ctx["verifier"]}).json()
+    return tok if "access_token" in tok else None
+
+
+def tokens_for(acct, client="console", new_password=None, prompt=None, b=None):
+    """Sign in to `client` through Keycloak's pages and get its tokens (authorization
+    code + PKCE, exchanged by us instead of the app). Returns (tokens|None, steps)."""
+    b, r, ctx = begin_sign_in(client, prompt, b)
+    r, steps = _drive(b, r, acct, new_password, stop_at=ctx["redirect"])
+    if not r.is_redirect:
+        return None, steps
+    tok = exchange_code(b, r, ctx)
+    if tok is None:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(r.headers["Location"]).query)
+        return None, steps + [f"ERROR: {q.get('error')}"]
+    return tok, steps
+
+
+def refresh(tok, client="console"):
+    """Use a refresh token. Returns (status, new_tokens_or_error)."""
+    r = http.post(OIDC + "/token", data={"grant_type": "refresh_token", "refresh_token": tok["refresh_token"],
+                                         "client_id": client, "client_secret": OIDC_SECRETS[client]})
+    return r.status_code, r.json()
+
+
+def oidc_logout(tok, client="console"):
+    """End the Keycloak session behind `tok` server-side (logout with its refresh token)."""
+    return http.post(OIDC + "/logout", data={"refresh_token": tok["refresh_token"], "client_id": client,
+                                             "client_secret": OIDC_SECRETS[client]}).status_code
+
+
+def fresh_token(acct, client="console"):
+    """A new access token for an account signed in earlier (re-signs in; staff enter a
+    new code). Long scripts use it so a 5-minute token never expires under a check."""
+    tok, steps = tokens_for(acct, client=client, prompt="login")
+    if not tok:
+        raise SystemExit(f"Could not sign in again as {acct.username}: {steps}")
+    return tok["access_token"]
 
 
 def app_sign_in(app, acct, new_password=None, b=None):
@@ -296,6 +352,38 @@ def kc_in_staff(username):
 
 def kc_sessions(username):
     return len(kc("GET", f"/users/{kc_user(username)['id']}/sessions"))
+
+
+def kc_session_list(username):
+    return kc("GET", f"/users/{kc_user(username)['id']}/sessions")
+
+
+def kc_require(username, *actions):
+    """Set Keycloak required actions (e.g. CONFIGURE_TOTP when a user opts in to 2FA)."""
+    user = kc_user(username)
+    user["requiredActions"] = list(actions)
+    kc("PUT", f"/users/{user['id']}", json=user)
+
+
+def kc_remove_otp(username):
+    uid = kc_user(username)["id"]
+    for cred in kc("GET", f"/users/{uid}/credentials"):
+        if cred["type"] == "otp":
+            kc("DELETE", f"/users/{uid}/credentials/{cred['id']}")
+
+
+def kc_unlock(username):
+    kc("DELETE", f"/attack-detection/brute-force/users/{kc_user(username)['id']}")
+
+
+def wait_for_audit(it_token, actions, timeout=90):
+    """Keycloak events reach the audit trail on the backend's next pull; wait for them."""
+    deadline = time.time() + timeout
+    missing = audit_missing(it_token, actions)
+    while missing and time.time() < deadline:
+        time.sleep(5)
+        missing = audit_missing(it_token, missing)
+    return missing
 
 
 def prepare(username):

@@ -28,8 +28,8 @@ import sys
 import time
 
 from _e2e import (APPS, KEYCLOAK, OIDC, SECRETS, Account, app_sign_in, audit_missing, browser, check, claims,
-                  delete, get, kc, kc_credentials, kc_in_staff, kc_sessions, kc_user, new_passphrase, post,
-                  prepare, put, session_for, summary, tokens_for, _form_action)
+                  delete, fresh_token, get, kc, kc_credentials, kc_in_staff, kc_sessions, kc_user, new_passphrase,
+                  post, prepare, put, session_for, summary, tokens_for, wait_for_audit, _form_action)
 
 STAFF = ("admin", "requestor", "hr", "director", "aa", "it_admin", "euss")
 
@@ -229,12 +229,15 @@ def main():
 
     # ------------------------------------------------------------------ audit trail
     print("-- audit trail")
+    # The IT Admin token from the start of the run is only valid for 5 minutes and this
+    # script takes longer, so sign in again first (an expired token gets 401 everywhere).
+    IT = fresh_token(it_acct)
     need = ["login_success", "login_failed", "login_blocked", "password_changed", "password_change_failed",
             "mfa_enrolled", "logout", "account_created", "account_deleted", "mfa_reset", "sessions_revoked",
             "password_reset_by_admin", "credentials_migrated_to_keycloak"]
     if mailbox:
         need += ["password_reset_requested", "password_reset_completed"]
-    missing = audit_missing(IT, need)
+    missing = wait_for_audit(IT, need)      # Keycloak events arrive on the backend's next pull
     check("Keycloak sign-in events and admin actions are in the audit trail", not missing, missing)
     _, d = get("/api/audit", IT, params={"action": "login_failed", "actor": "charlie", "page_size": 1})
     e = (d.get("entries") or [{}])[0]
