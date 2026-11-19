@@ -188,6 +188,36 @@
   </div>
 </section>
 
+{# ---------------- Sensitive positions (CHANGE 012) ---------------- #}
+<section class="panel" id="sensitive">
+  <div class="panel-head"><h2>Sensitive positions</h2></div>
+  <p class="muted small">Mark officers who hold a sensitive position. Under the Public Service casino rules they must declare
+    <strong>every</strong> visit to a local casino within 7 days (other officers only after more than 4 visits in a month, or an
+    annual levy pass). HR and Directors see the declarations next to the Mandatory Job Rotation tracker.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Officer</th><th>Department</th><th>Sensitive position</th><th>Change</th></tr></thead>
+      <tbody>
+        {% if not sensitive_officers %}<tr><td colspan="4" class="muted">No officers in a department.</td></tr>{% endif %}
+        {% for o in sensitive_officers %}
+        <tr>
+          <td>{{ o.full_name }}<div class="small muted">{{ o.username }}</div></td>
+          <td>{{ o.department_name }}</td>
+          <td>{% if o.sensitive_post %}<span class="pill bad">Yes</span>{% else %}<span class="pill ok">No</span>{% endif %}</td>
+          <td class="row-actions">
+            <form method="post" action="{{ url_for('integrity.set_sensitive', emp_id=o.employee_id) }}" class="inline-form">
+              <input type="hidden" name="sensitive" value="{{ 'no' if o.sensitive_post else 'yes' }}">
+              <input type="text" name="reason" placeholder="reason (optional)" class="reason-in">
+              <button class="btn-sm {{ '' if o.sensitive_post else 'primary' }}" type="submit">{{ 'Remove' if o.sensitive_post else 'Mark as sensitive' }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="panel">
   <div class="panel-head"><h2>My action history</h2></div>
   {{ m.history_table(history) }}

@@ -39,6 +39,36 @@ ROTATION_STATE = {
 }
 
 
+# Mandatory Block Leave + casino declarations (CHANGE 012): label + pill colour.
+MBL_STATE = {
+    "cleared": ("Cleared", "ok"),
+    "booked": ("All booked", "ok"),
+    "to_clear": ("Leave to clear", "wait"),
+    "at_risk": ("At risk — not booked", "bad"),
+    "cannot_clear": ("Cannot clear in time", "bad"),
+    "forfeited": ("Not cleared", "bad"),
+}
+CASINO_STATE = {
+    "late": ("Late declaration", "bad"),
+    "frequent": ("Frequent visitor", "wait"),
+    "ok": ("No issues", "ok"),
+}
+CASINO_FLAG = {"late": ("Late", "bad"),
+               "frequent": ("> 4 this month", "wait")}
+
+
+def mbl_state(s):
+    return MBL_STATE.get(s, (s, "wait"))
+
+
+def casino_state(s):
+    return CASINO_STATE.get(s, (s, "wait"))
+
+
+def casino_flag(s):
+    return CASINO_FLAG.get(s, (s, "wait"))
+
+
 def rotation_state(s):
     return ROTATION_STATE.get(s, (s, "wait"))
 
@@ -104,5 +134,6 @@ def register(app):
     app.jinja_env.filters["hm"] = fmt_hm
     app.jinja_env.globals.update(
         status_label=status_label, status_class=status_class, req_resource=req_resource,
-        behalf_label=behalf_label, rotation_state=rotation_state, ROLE_LABEL=ROLE_LABEL, TYPE_LABEL=TYPE_LABEL, ACTION_LABEL=ACTION_LABEL,
+        behalf_label=behalf_label, rotation_state=rotation_state,
+        mbl_state=mbl_state, casino_state=casino_state, casino_flag=casino_flag, ROLE_LABEL=ROLE_LABEL, TYPE_LABEL=TYPE_LABEL, ACTION_LABEL=ACTION_LABEL,
     )
