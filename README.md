@@ -58,6 +58,7 @@ services/
       passwords.py             temporary-password generator, legacy plaintext migration
       audit.py                 tamper-evident append-only audit trail (HMAC chain, file copy, verify)
       rotation.py              Mandatory Job Rotation tracker (due check, e-mails, decisions)
+      integrity.py             Mandatory Block Leave (leave to clear by 31 Dec) + casino visit declarations
       scheduling.py            EUSS slots, smart appointment booking, tracker data (CHANGE 011)
       tracker_logic.py         pure rules: roster, slot choice, what to bring, tracker steps
       api/       auth.py reference.py admin.py requests.py quotas.py audit.py rotations.py journey.py tracker.py   (route blueprints; hr.py = HR webhook)
@@ -390,6 +391,59 @@ officer joins a department (onboard / shift processed)  -> department_since = th
 * **Tunables** (backend environment, optional): `MJR_ROTATION_YEARS` (4),
   `MJR_DUE_SOON_DAYS` (90), `MJR_KEEP_REVIEW_MONTHS` (12), `MJR_CHECK_INTERVAL_SECONDS`
   (3600 — the check also runs at start-up).
+
+## Mandatory Block Leave (MBL) & casino visits
+
+Two more panels sit on the **same Director / HR dashboard as the MJR tracker**, directly under it.
+
+### Mandatory Block Leave — remaining leave to clear by 31 December
+
+Every officer must clear the annual leave they still have by the end of the year. Leave for
+the year = **entitlement** + leave **carried forward** from last year. Under MOM's rules on
+unused annual leave, leave carried forward into the next 12 months can be **forfeited** if it is
+not used by the end of that period (MOM, *Annual leave in special situations*), so carried-forward
+days are shown separately.
+
+| Column | Meaning |
+|--------|---------|
+| Leave *year* | entitlement (+ carried forward); *default* = not set by HR yet (`MBL_DEFAULT_ENTITLEMENT_DAYS`, 14) |
+| Taken / Booked | working days of recorded leave before today / from today (Mon–Fri less MOM public holidays) |
+| To clear | what is left, incl. carried-forward days at risk of forfeiture |
+| Start by | last day the officer can start leave and still clear it all by 31 Dec |
+| Status | *Leave to clear* → *At risk* (still not booked from 1 Oct) → *Cannot clear in time* (more left than working days); *All booked*, *Cleared* |
+
+Only officers with leave left appear in the main table; everyone's records and entitlements are
+under *All officers' leave records*.
+
+| Who | Does |
+|-----|------|
+| **HR** | records / cancels leave, sets each officer's entitlement and carried-forward days, **E-mail officers with leave to clear** (officer + HR copy) |
+| **Director** | read-only |
+| **Employee** | sees their own days to clear and *start by* date on *My journey* |
+
+### Casino visits (PSD rules, from 1 Oct 2013)
+
+* **Every officer** declares within **7 days** when visiting the local casinos (Marina Bay Sands,
+  Resorts World Sentosa) **more than 4 times in a calendar month**, or on buying an **annual
+  entry-levy pass** (S$3,000; daily levy S$150 for Citizens / PRs).
+* Officers in a **sensitive position** declare **every** visit within 7 days.
+* No gambling during working hours or on official premises.
+
+**IT Admin** marks who holds a sensitive position (*Sensitive positions* panel on the IT Admin
+dashboard). Officers declare on *My journey*; HR can declare on an officer's behalf. The panel
+lists each officer's rule, personal visits this month, last declaration and status (*Late
+declaration*, *Frequent visitor*, *No issues*), and every declaration of the last 90 days with its
+due date (*Late*, *> 4 this month*, or *voluntary* for visits 1–4 of a non-sensitive officer).
+HR and Directors are e-mailed about a late declaration.
+
+* **Audited:** `leave_recorded`, `leave_cancelled`, `leave_entitlement_set`, `mbl_reminders_sent`,
+  `casino_declared`, `sensitive_post_changed` (category *workflow*).
+* **Demo data** (relative to today, only on a database without it): leave — henry (cannot clear in
+  time), alice (12 days incl. 4 carried forward), bob / charlie / erin / ivy (4 days), grace (all
+  booked), frank and jack (cleared). Sensitive: alice, bob, erin. Casino — erin declared late,
+  charlie 5 visits last month, ivy annual pass, bob an official site visit, jack 2 voluntary.
+* **Public holidays** for 2026 and 2027 are in table `public_holidays` (MOM lists). Add each new
+  year's list there; other years count weekends only.
 
 ## New-hire journey tracker & smart appointment booking
 
@@ -1016,6 +1070,15 @@ password, TOTP set-up and sessions are Keycloak's (no backend endpoints any more
 | POST | `/api/rotations/{employee_id}/decision` | director — `{"decision":"keep","reason":…}` or `{"decision":"rotate","department_id":…}` |
 | GET | `/api/rotations/planned` | requestor — rotate decisions waiting for a shift request |
 | POST | `/api/rotations/check` | hr — run the due check now (e-mails Directors) |
+| GET | `/api/integrity` | director, hr — leave to clear, casino summary per officer, declarations (90 days) |
+| GET | `/api/integrity/officers` | it_admin, hr, director — officers with their sensitive-position flag |
+| POST | `/api/integrity/officers/{employee_id}/sensitive` | it_admin — `{"sensitive":true\|false,"reason":…}` |
+| POST | `/api/mbl/entitlements` | hr — `{"employee_id","year","entitled_days","carried_forward_days"}` |
+| POST | `/api/mbl/leaves` | hr — record leave `{"employee_id","start_date","end_date","note"}` |
+| POST | `/api/mbl/leaves/{id}/cancel` | hr |
+| POST | `/api/mbl/remind` | hr — e-mail officers who still have leave to clear |
+| GET | `/api/casino/me` | any signed-in officer — own rule, declarations, leave to clear |
+| POST | `/api/casino/declarations` | employee (self) or hr (`employee_id`) — `{"kind":"visit\|annual_levy","visit_date","casino","official_duty","purpose"}` |
 | GET/POST | `/api/access-reviews` | it_admin creates; assigned director, IT and EUSS can view according to role |
 | POST | `/api/access-review-items/{id}/decision` | assigned director — certify, initiate a governed return, or investigate |
 | POST | `/api/access-review-items/{id}/resolve` | it_admin — close an investigation with evidence |

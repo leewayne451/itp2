@@ -560,3 +560,64 @@ ALTER TABLE euss_bookings ADD CONSTRAINT euss_booking_status
 CREATE UNIQUE INDEX IF NOT EXISTS euss_bookings_one_live
     ON euss_bookings (request_id) WHERE status = 'booked';
 CREATE INDEX IF NOT EXISTS euss_bookings_slot ON euss_bookings (slot_id) WHERE status = 'booked';
+
+-- --------------------------------------------------------------------------- --
+-- Mandatory Block Leave (leave clearance) + casino visit declarations  (CHANGE 012)
+-- --------------------------------------------------------------------------- --
+-- Sensitive position (set by IT Admin): such officers declare EVERY casino visit.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS sensitive_post BOOLEAN NOT NULL DEFAULT FALSE;
+-- Clean-up of the first CHANGE 012 draft (post categories / 5-day blocks), if it was ever started.
+ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_post_category;
+ALTER TABLE employees DROP COLUMN IF EXISTS post_category;
+DROP TABLE IF EXISTS block_leaves;
+
+-- Gazetted public holidays (MOM): not working days when counting leave.
+CREATE TABLE IF NOT EXISTS public_holidays (
+    holiday DATE PRIMARY KEY,
+    name    TEXT NOT NULL
+);
+
+-- Annual leave for a year: entitlement + leave carried forward from the year before
+-- (carried-forward leave is forfeited if it is not cleared by 31 December).
+CREATE TABLE IF NOT EXISTS leave_entitlements (
+    employee_id          INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    year                 INTEGER NOT NULL,
+    entitled_days        NUMERIC(4,1) NOT NULL,
+    carried_forward_days NUMERIC(4,1) NOT NULL DEFAULT 0,
+    updated_by           INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (employee_id, year),
+    CONSTRAINT leave_entitlement_days CHECK (entitled_days >= 0 AND carried_forward_days >= 0)
+);
+
+-- Annual leave taken or booked. Working days are worked out when read (Mon-Fri less
+-- public holidays), so a holiday added later is reflected at once.
+CREATE TABLE IF NOT EXISTS leave_records (
+    id           SERIAL PRIMARY KEY,
+    employee_id  INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    start_date   DATE NOT NULL,
+    end_date     DATE NOT NULL,
+    note         TEXT,
+    status       TEXT NOT NULL DEFAULT 'approved',
+    recorded_by  INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT leave_record_dates  CHECK (end_date >= start_date),
+    CONSTRAINT leave_record_status CHECK (status IN ('approved', 'cancelled'))
+);
+CREATE INDEX IF NOT EXISTS leave_records_emp ON leave_records (employee_id, start_date);
+
+-- One row per declared casino visit, or per annual entry-levy purchase.
+CREATE TABLE IF NOT EXISTS casino_declarations (
+    id            SERIAL PRIMARY KEY,
+    employee_id   INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL,
+    visit_date    DATE NOT NULL,                 -- date of the visit, or of the levy purchase
+    casino        TEXT NOT NULL,
+    official_duty BOOLEAN NOT NULL DEFAULT FALSE,
+    purpose       TEXT,
+    declared_by   INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    declared_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT casino_decl_kind   CHECK (kind IN ('visit', 'annual_levy')),
+    CONSTRAINT casino_decl_casino CHECK (casino IN ('Marina Bay Sands', 'Resorts World Sentosa'))
+);
+CREATE INDEX IF NOT EXISTS casino_declarations_emp ON casino_declarations (employee_id, visit_date);
