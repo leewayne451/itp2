@@ -287,20 +287,27 @@ which raises the right request by itself.
 ```
 HRMS (https://localhost:8091)  --signed POST /api/hr/events-->  backend
    hire      ->  create the employee (if new)  ->  ONBOARD request
-   transfer  ->                                    SHIFT request
-   resign    ->  KILL SWITCH first             ->  RETURN request
+   transfer  ->                                    SHIFT request (on the transfer date)
+   resign    ->  RETURN request now            ->  access cut after the last working day
 ```
 
 | Event | What the backend does |
 |-------|----------------------|
 | `hire` | Creates the employee (no department, Keycloak account with **no password**; they get a welcome e-mail and use *Forgot Password?*), then raises an **onboard** request into the department HR named. If the person already exists *without* a department (`dave`, `kate`, `liam`) it only raises the onboarding. |
-| `transfer` | Raises a **shift** request (same behaviour as a human-raised shift: the employee is suspended while it is in flight). |
-| `resign` | **1. Kill switch:** the employee is set `inactive`, every access token and service session is refused at once, and Keycloak disables the account and signs them out of every app (retried in the background if Keycloak is down). **2.** Any other open request for them (onboard / shift / grant) is closed, so nobody can process it and re-activate a leaver. **3.** One **return** request is raised for the account service, which takes back the laptop **and** the account (both assets). The kill switch is applied and audited *before* the return request exists, and is never undone by a later failure. Entitlements stay in place until EUSS retrieves them, but every service already denies an inactive employee. |
+| `transfer` | Raises a **shift** request for the **transfer date** HR entered. The request is raised at once, so HR, the Director and the AA approve it in advance, and the employee keeps their current access until that date. On the transfer date the employee is suspended (the background worker, every `OFFBOARDING_INTERVAL_SECONDS`) and IT can process it, which switches the access to the new department; IT is refused before that date. A transfer dated today behaves like a human-raised shift: suspended at once. |
+| `resign` | Raises the **return** request at once (see below), then at the cut-off, 00:00 SGT after the last working day: **1. Kill switch:** the employee is set `inactive`, every access token and service session is refused at once, and Keycloak disables the account and signs them out of every app (retried in the background if Keycloak is down). **2.** Any other open request for them (onboard / shift / grant) is closed, so nobody can process it and re-activate a leaver. **3.** The **return** request for the account service, which takes back the laptop **and** the account (both assets), is the one already raised (or is raised now if there was none). The kill switch is never undone by a later failure. Entitlements stay in place until EUSS retrieves them, but every service already denies an inactive employee. |
 
-For a resignation, HRMS records the employee's last working date. Today executes the
-kill switch immediately; a future date schedules the shared offboarding workflow for
-23:59:59 Singapore time on that date. The schedule survives restarts and raises the
-Return request only when the cut-off actually executes.
+For a resignation, HRMS records the **last working day** and the **last physical day** (the
+last day in the office; it defaults to the last weekday on or before the last working day,
+so a Saturday last working day gives the Friday before). Access ends when the last working
+day does: the shared offboarding workflow is scheduled for 00:00 Singapore time the next
+day, and the schedule survives restarts. The **return** request is raised straight away
+with a *return-by* date of the last physical day, so it is approved in advance and its EUSS
+appointment is only ever booked (automatically, by hand or when moved) on or before that day.
+The cut-off reuses that request rather than raising a second one. Cancelling the
+resignation in HRMS also withdraws the early return request and frees its EUSS slot. A
+resignation event that arrives after its cut-off (e.g. delivered late by a retry) runs the
+kill switch at once.
 
 **The requestor is the system actor.** Requests raised this way show **HR System (Automated)**
 (account `hr-system`, role `system`) as requestor in the console, the request timeline and the
@@ -323,20 +330,23 @@ list recent events at `GET /api/hr/events`.
 **Try it.**
 
 1. Open <https://localhost:8091> (the page has no sign-in and is bound to 127.0.0.1 only).
-2. **Resign** `alice`: she is suspended everywhere at once (try her open Personal Laptop / Account
-   session: it ends within ~5 s), and a *return* request raised by *HR System (Automated)* appears
-   for `hr`. Take it through `hr` → `director` → `aa` → `itadmin`, then `req` books the appointment
-   and `euss` retrieves the assets.
+2. **Resign** `alice` with a last working day: a *return* request raised by *HR System (Automated)*
+   appears for `hr` at once, due by her last physical day. Take it through `hr` → `director` → `aa` →
+   `itadmin`; the EUSS appointment is matched on or before that day, and `euss` retrieves the assets.
+   Her access ends at 00:00 SGT after the last working day (for an immediate cut, IT Admin uses
+   *Emergency offboard*).
 3. **Hire** a new username, or `dave`: an *onboard* request appears for `hr`.
-4. **Transfer** `bob` to Engineering: a *shift* request is raised and `bob` is suspended until IT processes it.
+4. **Transfer** `bob` to Engineering with today's date: a *shift* request is raised and `bob` is suspended until IT
+   processes it. With a later date, `bob` keeps his access, the approvals can go ahead, and IT is told the
+   date if it tries to process early.
 
 **Upgrading to CHANGE 008:** run `python scripts/generate_secrets.py` (adds `HRMS_WEBHOOK_SECRET`),
 then `docker compose up -d --build`. The new table and the system account are created on start.
 Offline checks: `python services/backend/test_hr_events.py`.
 
 **Notes.** Employees who are `inactive` are no longer on the Mandatory Job Rotation clock.
-`effective_date` and `reason` are recorded but the kill switch is immediate: it does not wait
-for a future last working day.
+`effective_date` is the transfer date (transfer) or the last working day (resign);
+`last_physical_day` (resign only) may not be after it.
 
 ## Mandatory Job Rotation (MJR) tracker
 
@@ -857,8 +867,8 @@ next authorization check. Configure the poll interval with
 
 ## Scheduled and emergency leaver cut-off
 
-HRMS is the source of truth for planned resignations: HR records the last working date
-there and may cancel it there before execution. ServiceJourney displays no competing
+HRMS is the source of truth for planned resignations: HR records the last working day and
+the last physical day there and may cancel it there before execution. ServiceJourney displays no competing
 schedule controls. Only IT Admin has **Emergency offboard** in ServiceJourney for an immediate
 kill switch; every action requires a reason. At execution the backend marks the employee inactive first, advances the local
 token cut-off and requests Keycloak logout, closes conflicting open requests and raises one

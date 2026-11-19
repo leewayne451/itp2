@@ -6,15 +6,24 @@ HRSD). When HR records a hire, a transfer or a resignation there, it POSTs a sig
 here and the backend raises the right request by itself:
 
   hire      create the employee (if new)  -> raise an ONBOARD request
-  transfer                                -> raise a SHIFT request
-  resign    KILL SWITCH first             -> then raise a RETURN request
+  transfer                                -> raise a SHIFT request (dated: the employee is
+                                             suspended and moved on the transfer date)
+  resign    RETURN request now (due by the last physical day), access cut-off scheduled
+            for the end of the last working day; a cut-off already due runs the KILL
+            SWITCH at once
 
 The requests are raised by the "HR System (Automated)" account, so that is who the
 timeline, the audit trail and the requestors' queues show. They still go through the whole
 approval chain (HR -> Director -> AA -> IT -> appointment -> EUSS); only the raising is
 automatic.
 
-Kill switch (resign): before anything else the employee is set `inactive`, their access
+Resign (CHANGE 013): the event carries the last working day (effective_date) and the last
+physical day. The Return request is raised at once and its EUSS hand-over is booked on or
+before the last physical day; access is cut at the end of the last working day (00:00 SGT
+the next day) by the scheduled offboarding worker.
+
+Kill switch (a cut-off that is already due when the event arrives, and the same code as the
+console's emergency offboarding): before anything else the employee is set `inactive`, their access
 tokens and service sessions are refused at once and Keycloak signs them out and disables the
 account (retried in the background if Keycloak is down). Entitlements are deliberately left
 in place so the return workflow can still see what has to be taken back; every service
@@ -25,7 +34,7 @@ Delivery guarantees: authenticated by HMAC (hr_events.py), each event id is proc
 here is idempotent, so a retry after a crash resumes instead of duplicating.
 """
 import json
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from flask import Blueprint, request, jsonify, g
@@ -250,11 +259,14 @@ def _transfer(event, system):
                 "request_id": prior, "request_type": "shift", "department": dept["name"]}
     if emp["status"] != "active":
         raise HrReject(f"'{username}' is {emp['status']}; a transfer needs an active employee")
-    rid, err = workflows.raise_shift(system["id"], emp, dept["id"], _why(event) + f" — transfer to {dept['name']}")
+    effective = date.fromisoformat(event["effective_date"]) if event["effective_date"] else None
+    rid, err = workflows.raise_shift(system["id"], emp, dept["id"], _why(event) + f" — transfer to {dept['name']}",
+                                     effective_date=effective)
     if err:
         raise HrReject(err)
     return {"action": "transfer", "employee_id": emp["id"], "username": username,
-            "request_id": rid, "request_type": "shift", "department": dept["name"]}
+            "request_id": rid, "request_type": "shift", "department": dept["name"],
+            "effective_date": effective.isoformat() if effective else None}
 
 
 # --------------------------------------------------------------------------- #
@@ -266,15 +278,23 @@ def _resign(event, system):
     _ordinary(emp, username)
     result = {"action": "resign", "employee_id": emp["id"], "username": username}
     reason = event["reason"] or "HRMS resignation"
-    effective = date.fromisoformat(event["effective_date"]) if event["effective_date"] else datetime.now(SGT).date()
+    last_working = date.fromisoformat(event["effective_date"]) if event["effective_date"] else datetime.now(SGT).date()
+    last_physical = (date.fromisoformat(event["last_physical_day"]) if event.get("last_physical_day")
+                     else default_last_physical_day(last_working))
+    if last_physical > last_working:
+        raise HrReject("The last physical day cannot be after the last working day")
+    # Access ends when the last working day does: 00:00 Singapore time the next day.
+    cutoff = cutoff_at(last_working)
 
-    if effective > datetime.now(SGT).date():
-        # HRMS provides a last working DATE rather than a time. Apply the cut-off at
-        # the end of that Singapore business day; the common worker handles it.
-        effective_at = datetime.combine(effective, time(23, 59, 59), tzinfo=SGT).astimezone(timezone.utc)
-        offboarding.schedule(emp["id"], effective_at, reason, system)
-        result.update({"scheduled": True, "scheduled_offboard_at": effective_at.isoformat(),
-                       "effective_date": effective.isoformat()})
+    if cutoff > datetime.now(timezone.utc):
+        offboarding.schedule(emp["id"], cutoff, reason, system)
+        # Raise the Return now, so it is approved and the hand-over booked on or before the
+        # last physical day instead of after the person has left.
+        return_request, return_note = offboarding.raise_early_return(emp["id"], system, reason, last_physical)
+        result.update({"scheduled": True, "scheduled_offboard_at": cutoff.isoformat(),
+                       "effective_date": last_working.isoformat(),
+                       "last_physical_day": last_physical.isoformat(),
+                       "return_request": return_request, "return_note": return_note})
         return result
 
     executed = offboarding.execute(emp["id"], reason, system, trigger="hrms")
@@ -294,17 +314,30 @@ def _resign(event, system):
     return result
 
 
+def cutoff_at(last_working_day):
+    """The moment access ends: the end of the last working day, i.e. 00:00 SGT after it."""
+    return datetime.combine(last_working_day + timedelta(days=1), time(0, 0), tzinfo=SGT).astimezone(timezone.utc)
+
+
+def default_last_physical_day(last_working_day):
+    """The last weekday on or before the last working day (a Saturday -> the Friday)."""
+    d = last_working_day
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
 def _cancel_resignation(event, system):
     username = event["employee"]["username"]
     emp = _employee(username)
     _ordinary(emp, username)
     reason = event["reason"] or "HRMS resignation cancelled"
     try:
-        offboarding.cancel_schedule(emp["id"], reason, system)
+        withdrawn = offboarding.cancel_schedule(emp["id"], reason, system)
     except offboarding.OffboardingError as exc:
         raise HrReject(str(exc)) from exc
     return {"action": "cancel_resignation", "employee_id": emp["id"],
-            "username": username, "schedule_cancelled": True,
+            "username": username, "schedule_cancelled": True, "withdrawn_requests": withdrawn or [],
             "effective_date": event["effective_date"], "reason": reason}
 
 

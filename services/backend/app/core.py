@@ -473,6 +473,8 @@ def request_dict(row, with_events=False):
         "justification": row["justification"], "reject_reason": row["reject_reason"],
         "access_expires_at": row["access_expires_at"].isoformat() if row.get("access_expires_at") else None,
         "appointment_at": row["appointment_at"].isoformat() if row["appointment_at"] else None,
+        "effective_date": row["effective_date"].isoformat() if row.get("effective_date") else None,
+        "return_by": row["return_by"].isoformat() if row.get("return_by") else None,
         "asset_tag": row["asset_tag"],
         "created_at": row["created_at"].isoformat(), "updated_at": row["updated_at"].isoformat(),
     }

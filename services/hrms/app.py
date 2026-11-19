@@ -91,22 +91,41 @@ def _person(username):
     return next((p for p in STATE["people"] if p["username"] == username), None)
 
 
-def _rollover_resignations():
-    """After the last working day, reflect the executed schedule in HRMS itself."""
+def _rollover():
+    """Reflect dated events in the HR record once their day comes: a transfer moves the
+    person on the transfer date; a resignation ends after the last working day (the
+    backend cuts access at 00:00 Singapore time the next day)."""
     today = datetime.now(SGT).date()
     changed = False
     for person in STATE["people"]:
-        if person.get("status") != "resignation scheduled" or not person.get("resignation_date"):
+        move = person.get("pending_transfer")
+        if move and _date(move.get("date")) and _date(move["date"]) <= today:
+            person["department"] = move["department"]
+            person.pop("pending_transfer")
+            changed = True
+        if person.get("status") != "resignation scheduled":
             continue
-        try:
-            due = datetime.fromisoformat(person["resignation_date"]).date()
-        except ValueError:
-            continue
-        if due < today:  # backend executes at 23:59:59 SGT on `due`
+        due = _date(person.get("resignation_date"))
+        if due and due < today:
             person["status"] = "resigned"
             changed = True
     if changed:
         _save(STATE)
+
+
+def _date(text):
+    try:
+        return datetime.fromisoformat(text).date() if text else None
+    except ValueError:
+        return None
+
+
+def default_last_physical_day(last_working_day):
+    """The last weekday on or before the last working day (a Saturday -> the Friday)."""
+    d = last_working_day
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
 
 
 # --------------------------------------------------------------------------- #
@@ -165,7 +184,7 @@ def _retry_loop():
 # --------------------------------------------------------------------------- #
 # Recording an event
 # --------------------------------------------------------------------------- #
-def _record(etype, person, department=None, reason=None, effective_date=None):
+def _record(etype, person, department=None, reason=None, effective_date=None, last_physical_day=None):
     """Update the HR record, then send the event. Returns the event dict."""
     payload = {
         "event_id": f"hr-{uuid.uuid4()}",
@@ -176,6 +195,8 @@ def _record(etype, person, department=None, reason=None, effective_date=None):
         "effective_date": effective_date or datetime.now(SGT).date().isoformat(),
         "reason": reason or None,
     }
+    if last_physical_day:
+        payload["last_physical_day"] = last_physical_day
     ev = {"event_id": payload["event_id"], "type": etype, "username": person["username"],
           "full_name": person["full_name"], "department": department, "recorded": payload["occurred_at"],
           "body": json.dumps(payload, separators=(",", ":"), sort_keys=True),
@@ -195,7 +216,9 @@ def _flash_result(ev):
         if resp.get("kill_switch"):
             bits.append("kill switch applied — suspended everywhere")
         if resp.get("scheduled"):
-            bits.append(f"offboarding scheduled for {resp.get('effective_date')}")
+            bits.append(f"access ends after {resp.get('effective_date')}; return by {resp.get('last_physical_day')}")
+        elif ev["type"] == "transfer" and resp.get("effective_date"):
+            bits.append(f"transfer takes effect on {resp['effective_date']}")
         if resp.get("schedule_cancelled"):
             bits.append("scheduled resignation cancelled")
         if resp.get("employee_created"):
@@ -246,7 +269,7 @@ def _sgt(iso):
 @app.get("/")
 def index():
     with _lock:
-        _rollover_resignations()
+        _rollover()
         people = sorted(STATE["people"], key=lambda p: (p["status"] != "active", p["full_name"]))
         events = list(STATE["events"][:50])
     return render_template("index.html", people=people, events=events, departments=DEPARTMENTS,
@@ -281,42 +304,64 @@ def hire():
 def transfer():
     f = request.form
     department = f.get("department", "").strip()
+    when = _date(f.get("transfer_date", "").strip())
+    today = datetime.now(SGT).date()
+    if not when:
+        flash("Enter a valid transfer date.", "error")
+        return redirect(url_for("index"))
+    if when < today:
+        flash("The transfer date cannot be in the past.", "error")
+        return redirect(url_for("index"))
     with _lock:
         person = _person(f.get("username", ""))
         if not person or person["status"] != "active" or department not in DEPARTMENTS:
             flash("Pick an active employee and a department.", "error")
             return redirect(url_for("index"))
+        if person.get("pending_transfer"):
+            flash(f"{person['full_name']} already has a transfer on {person['pending_transfer']['date']}.", "error")
+            return redirect(url_for("index"))
         if person["department"] == department:
             flash(f"{person['full_name']} is already in {department}.", "error")
             return redirect(url_for("index"))
-        person["department"] = department
+        if when == today:
+            person["department"] = department
+        else:   # the HR record moves them on the date (see _rollover)
+            person["pending_transfer"] = {"department": department, "date": when.isoformat()}
         _save(STATE)
-    _flash_result(_record("transfer", person, department, f.get("reason")))
+    _flash_result(_record("transfer", person, department, effective_date=when.isoformat()))
     return redirect(url_for("index"))
 
 
 @app.post("/resign")
 def resign():
     f = request.form
-    effective_date = f.get("effective_date", "").strip()
-    try:
-        effective = datetime.fromisoformat(effective_date).date()
-    except ValueError:
-        flash("Enter a valid last working date.", "error")
+    today = datetime.now(SGT).date()
+    last_working = _date(f.get("effective_date", "").strip())
+    if not last_working:
+        flash("Enter a valid last working day.", "error")
         return redirect(url_for("index"))
-    if effective < datetime.now(SGT).date():
-        flash("Last working date cannot be in the past.", "error")
+    raw_physical = f.get("last_physical_day", "").strip()
+    last_physical = _date(raw_physical) if raw_physical else default_last_physical_day(last_working)
+    if not last_physical:
+        flash("Enter a valid last physical day.", "error")
+        return redirect(url_for("index"))
+    if last_working < today or last_physical < today:
+        flash("The last working day and the last physical day cannot be in the past.", "error")
+        return redirect(url_for("index"))
+    if last_physical > last_working:
+        flash("The last physical day cannot be after the last working day.", "error")
         return redirect(url_for("index"))
     with _lock:
         person = _person(f.get("username", ""))
         if not person or person["status"] != "active":
             flash("Pick an active employee.", "error")
             return redirect(url_for("index"))
-        person["status"] = "resigned" if effective == datetime.now(SGT).date() else "resignation scheduled"
-        person["resignation_date"] = effective.isoformat()
+        person["status"] = "resignation scheduled"   # access ends after the last working day
+        person["resignation_date"] = last_working.isoformat()
+        person["last_physical_day"] = last_physical.isoformat()
         _save(STATE)
     _flash_result(_record("resign", person, None, f.get("reason") or "Resignation",
-                          effective_date=effective.isoformat()))
+                          effective_date=last_working.isoformat(), last_physical_day=last_physical.isoformat()))
     return redirect(url_for("index"))
 
 
@@ -335,6 +380,7 @@ def cancel_resignation():
         effective_date = person.get("resignation_date")
         person["status"] = "active"
         person.pop("resignation_date", None)
+        person.pop("last_physical_day", None)
         _save(STATE)
     _flash_result(_record("cancel_resignation", person, None, reason,
                           effective_date=effective_date))

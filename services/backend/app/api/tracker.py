@@ -83,7 +83,7 @@ def request_slots(rid):
     if not _may_move(req):
         return jsonify(error="Forbidden"), 403
     limit = min(int(request.args.get("limit", 12)), 50)
-    slots = scheduling.free_slots(scheduling.earliest_start(), exclude_request=rid)
+    slots = scheduling.free_slots(scheduling.earliest_start(), until=scheduling.deadline(req), exclude_request=rid)
     current = scheduling.live_booking(rid)
     best, reason = scheduling.find_slot(rid)
     return jsonify(slots=[_slot(s) for s in slots if not current or s["id"] != current["slot_id"]][:limit],

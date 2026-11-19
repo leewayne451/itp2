@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from flask import Blueprint, request, jsonify, g
 
-from .. import access_lifecycle, audit, db, document_privacy, rotation, scheduling, sync
+from .. import access_lifecycle, audit, db, document_privacy, rotation, scheduling, sync, workflows
 from ..auth import require_auth, require_role
 from ..core import (
     STATE_ROLE, APPROVAL_NEXT, STAFF_ROLES, KIND_OF,
@@ -371,6 +371,9 @@ def process_request(rid):
     if err:
         return err
     if req["type"] == "shift":
+        if req.get("effective_date") and req["effective_date"] > workflows.today_sgt():
+            return jsonify(error=f"This transfer takes effect on {workflows.nice_date(req['effective_date'])}. "
+                                 "IT can switch the access from that date."), 409
         return _process_shift(req)
     if req["type"] == "onboard":
         return _process_onboard(req)
@@ -441,6 +444,8 @@ def _process_into_department(req, verb):
         return jsonify(requires_override=True, warning="Quota exceeded for: " + ", ".join(over)), 409
 
     if verb == "shift":
+        db.query("UPDATE requests SET transfer_started_at=COALESCE(transfer_started_at, now()) WHERE id=%s",
+                 (req["id"],), fetch=None)   # the transfer-date worker must not suspend after this
         # Revoke one by one so every removed entitlement is individually audited.
         for row in db.query("SELECT service_id FROM employee_access WHERE employee_id=%s", (target,)):
             revoke_access(target, row["service_id"])

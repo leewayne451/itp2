@@ -53,6 +53,16 @@ def earliest_start(now=None):
     return (now or _now()) + timedelta(hours=LEAD_HOURS)
 
 
+def deadline(req):
+    """A leaver's Return must be handed over on or before their last physical day
+    (CHANGE 013): the appointment has to START before 00:00 SGT after that day. None when
+    the request has no such date."""
+    d = req.get("return_by") if req else None
+    if not d:
+        return None
+    return datetime.combine(d + timedelta(days=1), datetime.min.time(), tl.SGT).astimezone(timezone.utc)
+
+
 # --------------------------------------------------------------------------- #
 # Slots
 # --------------------------------------------------------------------------- #
@@ -118,7 +128,7 @@ def _book(rid, slot_id, method, actor_id, reason, allowed_statuses=("pending_app
     so two requests can never take the last place at the same time. Any earlier booking
     of the request is kept as 'moved'. Returns the slot row (with the old one, if any)."""
     with db.transaction() as cur:
-        cur.execute("SELECT id, status FROM requests WHERE id=%s FOR UPDATE", (rid,))
+        cur.execute("SELECT id, status, return_by FROM requests WHERE id=%s FOR UPDATE", (rid,))
         req = cur.fetchone()
         if not req or req["status"] not in allowed_statuses:
             raise SlotUnavailable("This request is not at the appointment stage any more.")
@@ -129,6 +139,11 @@ def _book(rid, slot_id, method, actor_id, reason, allowed_statuses=("pending_app
         soonest = earliest_start() if method == "chosen" else _now() + timedelta(hours=1)
         if slot["starts_at"] < soonest:
             raise SlotUnavailable(f"That slot is too soon: EUSS needs {LEAD_HOURS:g} hours to get ready.")
+        until = deadline(req)
+        if until and slot["starts_at"] >= until:
+            d = req["return_by"]
+            raise SlotUnavailable(f"The return must be on or before {d:%a} {d.day} {d:%b} "
+                                  "(the employee's last physical day). Pick an earlier slot.")
         cur.execute("""SELECT COUNT(*) AS n FROM euss_bookings b JOIN requests r ON r.id = b.request_id
                        WHERE b.slot_id=%s AND b.status='booked' AND r.status='pending_euss' AND b.request_id<>%s""",
                     (slot_id, rid))
@@ -154,7 +169,8 @@ def _book(rid, slot_id, method, actor_id, reason, allowed_statuses=("pending_app
 def find_slot(rid, now=None, exclude_slot=None):
     """The slot the smart match would give this request now: (slot, reason)."""
     req = get_joined(rid)
-    slots = [s for s in free_slots(earliest_start(now), exclude_request=rid) if s["id"] != exclude_slot]
+    slots = [s for s in free_slots(earliest_start(now), until=deadline(req), exclude_request=rid)
+             if s["id"] != exclude_slot]
     return tl.choose_slot(slots, earliest_start(now), other_visits(req["target_employee_id"], rid))
 
 
@@ -364,7 +380,7 @@ def tracker(rid, now=None, stats=None, owners=None):
     def projected(earliest):
         nonlocal upcoming
         if upcoming is None:
-            upcoming = free_slots(_now(), exclude_request=rid)
+            upcoming = free_slots(_now(), until=deadline(r), exclude_request=rid)
         slot, _ = tl.choose_slot(upcoming, earliest, other_visits(r["target_employee_id"], rid))
         return slot
 
@@ -374,6 +390,9 @@ def tracker(rid, now=None, stats=None, owners=None):
         "requestor_is_system": is_system_actor_id(r["requestor_id"]),
         "resource_type": svc and svc["resource_type"], "reject_reason": r["reject_reason"],
         "summary": _summary(r),
+        "return_by": r.get("return_by"),
+        "it_not_before": (datetime.combine(r["effective_date"], tl.OFFICE_START, tl.SGT)
+                          if r["type"] == "shift" and r.get("effective_date") else None),
     }
     t = tl.build_tracker(req, events, now=now, booking=booking,
                          stats=_stage_stats() if stats is None else stats,
@@ -388,7 +407,15 @@ def _summary(r):
     if r["type"] == "onboard":
         return f"Joining {r['new_department_name'] or 'a department'}"
     if r["type"] == "shift":
-        return f"Moving from {r['source_department_name'] or '?'} to {r['new_department_name'] or '?'}"
+        text = f"Moving from {r['source_department_name'] or '?'} to {r['new_department_name'] or '?'}"
+        if r.get("effective_date"):
+            d = r["effective_date"]
+            text += f" on {d:%a} {d.day} {d:%b}"
+        return text
     if r["type"] == "return":
-        return f"Returning {r['service_name'] or 'equipment'}"
+        text = f"Returning {r['service_name'] or 'equipment'}"
+        if r.get("return_by"):
+            d = r["return_by"]
+            text += f" by {d:%a} {d.day} {d:%b}"
+        return text
     return f"New access: {r['service_name'] or 'a service'}"

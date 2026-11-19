@@ -242,12 +242,19 @@ def stage_hours(stats, rtype):
     return out
 
 
+def _not_before_note(when):
+    w = when.astimezone(SGT)
+    return f"Your transfer takes effect on {w:%a} {w.day} {w:%b}: IT switches your access from that date"
+
+
 def build_tracker(req, events, *, now, booking=None, stats=None, owners=None,
                   projected_slot=None, lead_hours=24.0, auto_match=True):
     """The parcel-tracking view of one request.
 
     req             type, status, id, created_at, target_name, requestor_name,
-                    requestor_is_system, resource_type, new_department_name, reject_reason
+                    requestor_is_system, resource_type, new_department_name, reject_reason;
+                    optional (CHANGE 013) it_not_before: aware datetime IT cannot process
+                    before (a dated transfer), return_by: date the appointment must not pass
     events          oldest first: action, created_at (aware datetime), actor_name, note
     booking         the live EUSS booking: starts_at, ends_at, location, method, reason
     stats           analytics stage statistics, see stage_hours()
@@ -308,6 +315,10 @@ def build_tracker(req, events, *, now, booking=None, stats=None, owners=None,
                 step["late"] = age > max(p90, median * 1.5)
                 if step["late"]:
                     step["note"] = "Taking longer than usual at this step"
+                if stage == "pending_it" and req.get("it_not_before") and req["it_not_before"] > now:
+                    eta = max(eta, req["it_not_before"])
+                    step["late"] = False
+                    step["note"] = _not_before_note(req["it_not_before"])
             late = late or step["late"]
             step["eta"] = _iso(eta)
             cursor = eta
@@ -326,7 +337,14 @@ def build_tracker(req, events, *, now, booking=None, stats=None, owners=None,
                 step["eta"] = _iso(cursor)
             else:
                 cursor = office_time(cursor + timedelta(hours=median))
+                if stage == "pending_it" and req.get("it_not_before") and req["it_not_before"] > cursor:
+                    cursor = req["it_not_before"]
+                    step["note"] = _not_before_note(req["it_not_before"])
                 step["eta"] = _iso(cursor)
+        if stage == "pending_euss" and req.get("return_by") and step["state"] in ("current", "upcoming"):
+            d = req["return_by"]
+            step["note"] = ((step["note"] + " · ") if step["note"] else "") + \
+                f"Must be on or before {d:%a} {d.day} {d:%b} (your last physical day)"
         steps.append(step)
         final_eta = cursor
 

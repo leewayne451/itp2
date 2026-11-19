@@ -72,6 +72,13 @@ check("over-long reason rejected", raises(hr.EventError, hr.validate_event, dict
 check("invalid effective date rejected", raises(hr.EventError, hr.validate_event,
       {"event_id": "hr-1234abcd", "type": "resign", "employee": {"username": "alice"},
        "effective_date": "2026-99-99"}))
+leaver = {"event_id": "hr-1234abcd", "type": "resign", "employee": {"username": "alice"},
+          "effective_date": "2026-11-28", "last_physical_day": "2026-11-27"}
+check("last physical day carried through", hr.validate_event(leaver)["last_physical_day"] == "2026-11-27")
+check("last physical day after the last working day rejected", raises(hr.EventError, hr.validate_event,
+      dict(leaver, last_physical_day="2026-11-29")))
+check("invalid last physical day rejected", raises(hr.EventError, hr.validate_event,
+      dict(leaver, last_physical_day="27/11/2026")))
 
 print("\nFAILED: " + ", ".join(failed) if failed else "\nAll checks passed.")
 sys.exit(1 if failed else 0)

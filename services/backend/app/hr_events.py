@@ -65,14 +65,27 @@ def _text(value, field, *, max_len, required=True):
     return value
 
 
+def _date(obj, field):
+    value = _text(obj.get(field), field, max_len=10, required=False) or None
+    if value:
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise EventError(f"{field} must be YYYY-MM-DD") from exc
+    return value
+
+
 def validate_event(obj):
     """Normalise a decoded webhook body, or raise EventError.
 
     {"event_id": "...", "type": "hire|transfer|resign", "occurred_at": "...",
      "employee": {"username": "...", "full_name": "...", "email": "..."},
-     "department": "Sales", "effective_date": "YYYY-MM-DD", "reason": "..."}
+     "department": "Sales", "effective_date": "YYYY-MM-DD", "last_physical_day": "YYYY-MM-DD",
+     "reason": "..."}
 
     `department` is the NEW department (hire, transfer); not used for resign.
+    `effective_date` is the transfer date (transfer) or the last working day (resign);
+    `last_physical_day` (resign only) is the last day the person is in the office.
     """
     if not isinstance(obj, dict):
         raise EventError("body must be a JSON object")
@@ -93,17 +106,16 @@ def validate_event(obj):
     if email and not _EMAIL.match(email):
         raise EventError("employee.email is not a valid address")
     department = _text(obj.get("department"), "department", max_len=80, required=etype in ("hire", "transfer"))
-    effective_date = _text(obj.get("effective_date"), "effective_date", max_len=10, required=False) or None
-    if effective_date:
-        try:
-            date.fromisoformat(effective_date)
-        except ValueError as exc:
-            raise EventError("effective_date must be YYYY-MM-DD") from exc
+    effective_date = _date(obj, "effective_date")
+    last_physical_day = _date(obj, "last_physical_day") if etype == "resign" else None
+    if last_physical_day and effective_date and last_physical_day > effective_date:
+        raise EventError("last_physical_day cannot be after the last working day (effective_date)")
     return {
         "event_id": event_id, "type": etype,
         "employee": {"username": username, "full_name": full_name, "email": email or None},
         "department": department or None,
         "occurred_at": _text(obj.get("occurred_at"), "occurred_at", max_len=40, required=False) or None,
         "effective_date": effective_date,
+        "last_physical_day": last_physical_day,
         "reason": _text(obj.get("reason"), "reason", max_len=500, required=False) or None,
     }

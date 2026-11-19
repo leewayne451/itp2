@@ -176,6 +176,18 @@ ret = tl.build_tracker(dict(base, type="return", status="pending_hr", resource_t
                        [ev("submitted", at(14, 9))], now=NOW, owners=OWNERS, projected_slot=proj)
 check("tracker: return wording", {s["key"]: s for s in ret["steps"]}["pending_euss"]["label"].startswith("Return your items"))
 
+# ---------------------------------------------------------------- dated HR events (CHANGE 013)
+dated = tl.build_tracker(dict(base, type="shift", status="pending_aa", it_not_before=at(25, 9)),
+                         [ev("submitted", at(13, 9)), ev("approved", at(13, 10)), ev("approved", at(13, 11))],
+                         now=NOW, owners=OWNERS, projected_slot=proj)
+d = {s["key"]: s for s in dated["steps"]}
+check("tracker: a dated transfer's IT step waits for the transfer date",
+      d["pending_it"]["eta"] == at(25, 9).isoformat() and "takes effect on Wed 25 Nov" in d["pending_it"]["note"])
+rb = tl.build_tracker(dict(base, type="return", status="pending_hr", resource_type="account", return_by=date(2026, 11, 27)),
+                      [ev("submitted", at(14, 9))], now=NOW, owners=OWNERS, projected_slot=proj)
+check("tracker: a leaver's return says by when",
+      "on or before Fri 27 Nov" in {s["key"]: s for s in rb["steps"]}["pending_euss"]["note"])
+
 print()
 print(f"{len(failed)} failed" if failed else "all checks passed")
 raise SystemExit(1 if failed else 0)

@@ -46,18 +46,19 @@
       </form>
       <p class="hint" style="margin-top:10px">Tip: <code>dave</code>, <code>kate</code> and <code>liam</code> already exist in ServiceJourney without a department — hiring them only raises the onboarding.</p></section>
 
-    <section class="card"><h2>Record a transfer</h2><p class="hint">Raises a department shift request.</p>
+    <section class="card"><h2>Record a transfer</h2><p class="hint">Raises the department shift request now, so the approvals happen in advance. The employee keeps their current access until the transfer date; on that date it is suspended and IT switches it to the new department.</p>
       <form class="f" method="post" action="{{ url_for('transfer') }}">
         <label>Employee<select name="username" required>{% for p in people if p.status == 'active' %}<option value="{{ p.username }}">{{ p.full_name }} — {{ p.department }}</option>{% endfor %}</select></label>
         <label>New department<select name="department" required>{% for d in departments %}<option>{{ d }}</option>{% endfor %}</select></label>
-        <label>Reason (optional)<input name="reason"></label>
+        <label>Transfer date<input type="date" name="transfer_date" required value="{{ now_date }}" min="{{ now_date }}"></label>
         <button>Record transfer</button>
       </form></section>
 
-    <section class="card"><h2>Record a resignation</h2><p class="hint">Choose the last working date. Today applies the kill switch immediately; a future date schedules it for 23:59 Singapore time. The Return request is raised when the cut-off executes.</p>
-      <form class="f" method="post" action="{{ url_for('resign') }}" onsubmit="return confirm('Record this resignation and its scheduled access cut-off?')">
+    <section class="card"><h2>Record a resignation</h2><p class="hint">Access ends when the last working day does (midnight Singapore time). The Return request is raised straight away, so the laptop and account are handed back to EUSS on or before the last physical day. If the last working day is a weekend, the last physical day defaults to the Friday before.</p>
+      <form class="f" method="post" action="{{ url_for('resign') }}" onsubmit="return confirm('Record this resignation? Access ends after the last working day.')">
         <label>Employee<select name="username" required>{% for p in people if p.status == 'active' %}<option value="{{ p.username }}">{{ p.full_name }} — {{ p.department }}</option>{% endfor %}</select></label>
-        <label>Last working date<input type="date" name="effective_date" required value="{{ now_date }}" min="{{ now_date }}"></label>
+        <label>Last working day<input type="date" name="effective_date" id="lwd" required value="{{ now_date }}" min="{{ now_date }}"></label>
+        <label>Last physical day (in the office)<input type="date" name="last_physical_day" id="lpd" required value="{{ now_date }}" min="{{ now_date }}"></label>
         <label>Reason (optional)<input name="reason" placeholder="Resignation"></label>
         <button class="danger">Record resignation</button>
       </form>
@@ -82,7 +83,8 @@
       <td>{% set r = e.response or {} %}
         {% if r.error %}{{ r.error }}{% else %}
             {% if r.kill_switch %}kill switch: <b>{{ r.kill_switch.status }}</b><br>{% endif %}
-            {% if r.scheduled %}offboarding scheduled for <b>{{ r.effective_date }}</b> at 23:59 SGT<br>{% endif %}
+            {% if r.scheduled %}access ends after <b>{{ r.effective_date }}</b>{% if r.last_physical_day %}; return by <b>{{ r.last_physical_day }}</b>{% endif %}<br>{% endif %}
+            {% if e.type == 'transfer' and r.effective_date %}takes effect <b>{{ r.effective_date }}</b><br>{% endif %}
             {% if r.schedule_cancelled %}scheduled resignation <b>cancelled</b><br>{% endif %}
           {% if r.employee_created %}employee created<br>{% endif %}
             {% if r.request_id %}{{ r.request_type }} request <b>#{{ r.request_id }}</b>{% elif r.return_request %}return request <b>#{{ r.return_request }}</b>{% elif r.return_note %}{{ r.return_note }}{% endif %}
@@ -93,6 +95,32 @@
 
   <section class="card"><h2>People in HR</h2>
     <table><tr><th>Username</th><th>Name</th><th>Department</th><th>Status</th></tr>
-    {% for p in people %}<tr><td><code>{{ p.username }}</code></td><td>{{ p.full_name }}</td><td>{{ p.department }}</td><td><span class="pill {{ p.status }}">{{ p.status }}</span></td></tr>{% endfor %}</table></section>
+    {% for p in people %}<tr><td><code>{{ p.username }}</code></td><td>{{ p.full_name }}</td><td>{{ p.department }}{% if p.pending_transfer %}<br><span class="mute">→ {{ p.pending_transfer.department }} on {{ p.pending_transfer.date }}</span>{% endif %}</td><td><span class="pill {{ p.status }}">{{ p.status }}</span>{% if p.status == 'resignation scheduled' %}<br><span class="mute">last working day {{ p.resignation_date }}{% if p.last_physical_day %} · last physical day {{ p.last_physical_day }}{% endif %}</span>{% endif %}</td></tr>{% endfor %}</table></section>
 </main>
+<script>
+  // The last physical day follows the last working day (a weekend -> the Friday before)
+  // until HR picks a different one.
+  (function () {
+    var lwd = document.getElementById('lwd'), lpd = document.getElementById('lpd');
+    if (!lwd || !lpd) return;
+    var touched = false;
+    function lastWeekday(v) {
+      var d = new Date(v + 'T00:00:00');
+      if (isNaN(d)) return '';
+      while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+      var m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+    function sync() {
+      lpd.max = lwd.value;
+      if (!touched) {
+        var v = lastWeekday(lwd.value);
+        lpd.value = v && v >= lpd.min ? v : lwd.value;
+      }
+    }
+    lpd.addEventListener('input', function () { touched = true; });
+    lwd.addEventListener('input', sync);
+    sync();
+  })();
+</script>
 </body></html>

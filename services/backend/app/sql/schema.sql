@@ -111,6 +111,13 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS on_behalf BOOLEAN NOT NULL DEFAULT
 -- Optional expiry requested for a one-off Grant. It becomes effective on the
 -- entitlement only when IT processes the approved request.
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ;
+-- CHANGE 013: dates from the HR system. effective_date = the day a transfer (shift)
+-- takes effect: approvals run before it, the suspension and the access switch happen on
+-- it. return_by = a leaver's last physical day: the EUSS return appointment of the early
+-- Return request must be on or before it. transfer_started_at = when the suspension ran.
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS effective_date DATE;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS return_by DATE;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS transfer_started_at TIMESTAMPTZ;
 
 -- Supporting documents a requestor may attach to a request (stored inline as
 -- base64 for this POC — no separate file store).

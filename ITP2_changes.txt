@@ -5,6 +5,46 @@ and how it was verified. Newest entry at the top. Times are Singapore (SGT, UTC+
 
 
 -------------------------------------------------------------------------------
+[2026-11-19 SGT]  CHANGE 013 — HRMS: transfer date, last working day and last physical day
+-------------------------------------------------------------------------------
+Summary
+  Transfer: the reason field is gone; HR enters the TRANSFER DATE instead. The shift request
+  is raised at once so the approvals happen in advance, but the employee keeps their current
+  access until that date. On the date the background worker suspends them and IT may process
+  the shift (switch the access); IT is refused before the date. A transfer dated today works
+  as before (suspended at once). The HR record moves the person on the date.
+  Resignation: HR enters the LAST WORKING DAY and the LAST PHYSICAL DAY (defaults to the last
+  weekday on or before the last working day, so a Saturday gives the Friday before; it may
+  not be after the last working day, and neither may be in the past). Access ends when the
+  last working day does: 00:00 SGT the next day (every "23:59" mention is gone). The Return
+  request is raised straight away with a return-by date, so its EUSS appointment is matched,
+  chosen or moved only on or before the last physical day; the cut-off reuses it. Cancelling
+  the resignation withdraws that Return and frees its slot. An event arriving after its
+  cut-off still runs the kill switch at once.
+
+Files
+  services/hrms/app.py, templates/index.html   transfer date input (reason removed); two
+                                               resignation dates with Friday default; wording
+  services/backend/app/sql/schema.sql          requests.effective_date, return_by, transfer_started_at
+  services/backend/app/hr_events.py            validates last_physical_day
+  services/backend/app/api/hr.py               dated transfer; 00:00 cut-off; early Return
+  services/backend/app/workflows.py            raise_shift(effective_date), start_due_transfers(),
+                                               raise_return(return_by)
+  services/backend/app/offboarding.py          raise_early_return(), withdraw it on cancel;
+                                               worker also starts due transfers
+  services/backend/app/api/requests.py         IT refused before the transfer date
+  services/backend/app/scheduling.py           deadline(): slots only up to the last physical day
+  services/backend/app/api/tracker.py          slot list respects the deadline
+  services/backend/app/tracker_logic.py        tracker shows the transfer date / return-by date
+  services/backend/app/core.py                 request JSON carries effective_date, return_by
+  README.md                                    HR integration and leaver cut-off sections
+
+Verification
+  test_hr_dates_db.py (new, real webhook + Postgres): 28/28. test_scheduling_db.py 46/46,
+  test_tracker.py 45/45, test_offboarding.py 13/13, test_hr_events.py 27/27. HRMS page
+  checked in Chromium: a Saturday last working day fills the Friday as last physical day.
+
+-------------------------------------------------------------------------------
 [2026-11-13 19:55 SGT]  CHANGE 011 follow-up — Moving an appointment gave a 500 and an e-mail storm
 -------------------------------------------------------------------------------
 Problem (found in manual testing, test 2 "employee moves the appointment")
