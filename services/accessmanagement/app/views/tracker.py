@@ -29,8 +29,7 @@ def _back(default):
 @login_required
 def my_journey():
     journeys = [_with_slots(t) for t in get_json("/api/tracker/me", default=[]) or []]
-    casino = get_json("/api/casino/me", default=None)    # own casino rule + declarations (CHANGE 012)
-    return render_template("my_journey.html", journeys=journeys, casino=casino)
+    return render_template("my_journey.html", journeys=journeys)
 
 
 @bp.get("/requests/<int:rid>/track")

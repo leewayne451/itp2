@@ -127,11 +127,6 @@
 </section>
 {% endif %}
 
-{# ------- Mandatory Block Leave + casino visits (CHANGE 012) ------- #}
-{% if integrity is not none and current_user.role in ('director', 'hr') %}
-{% include "_integrity.html" %}
-{% endif %}
-
 {% if current_user.role == 'aa' %}
 <section class="panel">
   <div class="panel-head"><h2>Department quotas</h2></div>

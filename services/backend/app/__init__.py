@@ -5,8 +5,7 @@ from . import access_lifecycle, audit, db, document_privacy, offboarding, passwo
 from .clients import authenticate_client
 from .api import (auth, reference, admin, quotas, requests as requests_api,
                   audit as audit_api, rotations, journey, hr, access_reviews, tracker,
-                  privacy_reviews, offboarding as offboarding_api, demand_forecast,
-                  integrity as integrity_api)
+                  privacy_reviews, offboarding as offboarding_api, demand_forecast)
 
 
 def create_app():
@@ -14,8 +13,7 @@ def create_app():
     app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # bound request bodies (documents are base64)
     app.before_request(authenticate_client)
     for module in (auth, reference, admin, quotas, requests_api, audit_api, rotations,
-                   journey, hr, access_reviews, tracker, privacy_reviews, offboarding_api, demand_forecast,
-                   integrity_api):
+                   journey, hr, access_reviews, tracker, privacy_reviews, offboarding_api, demand_forecast):
         app.register_blueprint(module.bp)
 
     @app.after_request

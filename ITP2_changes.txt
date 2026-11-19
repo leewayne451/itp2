@@ -5,7 +5,6 @@ and how it was verified. Newest entry at the top. Times are Singapore (SGT, UTC+
 
 
 -------------------------------------------------------------------------------
-<<<<<<< Updated upstream
 [2026-11-19 SGT]  CHANGE 013 — HRMS: transfer date, last working day and last physical day
 -------------------------------------------------------------------------------
 Summary
@@ -44,73 +43,6 @@ Verification
   test_hr_dates_db.py (new, real webhook + Postgres): 28/28. test_scheduling_db.py 46/46,
   test_tracker.py 45/45, test_offboarding.py 13/13, test_hr_events.py 27/27. HRMS page
   checked in Chromium: a Saturday last working day fills the Friday as last physical day.
-=======
-[2026-11-19 22:10 SGT]  CHANGE 012 — Mandatory Block Leave (leave to clear) and casino visit declarations
--------------------------------------------------------------------------------
-Summary
-  Two panels added to the same Director / HR dashboard as the Mandatory Job Rotation tracker
-  (CHANGE 006), directly under it, plus a "Sensitive positions" panel for IT Admin:
-    * Mandatory Block Leave: officers who still have annual leave to clear by 31 December —
-      entitlement + carried forward, taken, booked, left to clear (with carried-forward days at
-      risk of forfeiture), status and the last day they can start leave and still clear it.
-    * Casino visits: each officer's declaration rule, personal visits this month, last
-      declaration and status; every declaration of the last 90 days checked against its due date.
-    * IT Admin marks which officers hold a sensitive position (yes / no).
-  Officers declare their own casino visits and see their own leave to clear on My journey.
-
-Rules used (sources)
-  MOM "Annual leave in special situations": unused annual leave carried forward into the next
-    12 months can be forfeited if not used by the end of that period.
-  PSD media release "Measures to strengthen integrity in the Public Service", 30 Sep 2013 (from
-    1 Oct 2013): all officers declare within 7 days when visiting the local casinos more than 4
-    times a month or buying an annual pass; officers in sensitive positions declare every visit
-    within 7 days. PSD reply to PQ, 22 Nov 2010: no gambling in working hours / on official premises.
-  Casino entry levy (from 4 Apr 2019): S$150 a day, S$3,000 a year (Citizens / PRs).
-  MOM public holidays 2026 (press release 16 Jun 2025) and 2027 (18 Jun 2026), incl. days in lieu.
-
-Assumptions
-  - All remaining leave (this year's + carried forward) must be cleared by 31 December; carried-
-    forward days are the ones forfeited first. Leave days = working days (Mon-Fri less public
-    holidays); entitlements can be in half days. One leave record may not cross 31 December.
-  - Default entitlement 14 days when HR has not set one for the year (MBL_DEFAULT_ENTITLEMENT_DAYS).
-  - "At risk" = leave still not booked from 1 Oct; "cannot clear in time" = more days left than
-    working days left in the year.
-  - "Local casinos" = Marina Bay Sands and Resorts World Sentosa; the 7 days run from the visit
-    (or levy purchase). For a non-sensitive officer the 5th and later personal visits in a month
-    must be declared (visits 1-4 voluntary). Official-duty visits need a purpose.
-  - Declarations are checked against the officer's CURRENT sensitive-position flag; they go to HR,
-    and HR + Directors are e-mailed about late ones. Penalties are left to the agency.
-
-What changed
-  services/backend/app/integrity.py        NEW: working days, leave to clear (entitlements, records, states,
-                                           start-by, reminders), sensitive flag, casino rules / checks, alerts, audit
-  services/backend/app/api/integrity.py    NEW endpoints (see README API table)
-  services/backend/app/__init__.py         registers the blueprint
-  services/backend/app/sql/schema.sql      employees.sensitive_post; tables public_holidays, leave_entitlements,
-                                           leave_records, casino_declarations (idempotent)
-  services/backend/app/sql/seed.sql        2026 + 2027 public holidays; demo data relative to today
-  services/backend/test_integrity_db.py    NEW: 58 checks on a throwaway Postgres
-  services/accessmanagement/app/views/integrity.py           NEW: HR leave actions, IT Admin switch, declarations
-  services/accessmanagement/app/templates/_integrity.html     NEW: MBL + Casino visits panels
-  services/accessmanagement/app/templates/_casino_fields.html NEW: shared declaration fields
-  services/accessmanagement/app/templates/dashboard/approver.html  includes the panels under MJR (director, hr)
-  services/accessmanagement/app/templates/dashboard/it_admin.html  "Sensitive positions" panel
-  services/accessmanagement/app/templates/my_journey.html          own casino rule, form, history, leave to clear
-  services/accessmanagement/app/views/dashboard.py, views/tracker.py, labels.py, __init__.py  data + labels
-  services/accessmanagement/test_console_integrity.py  NEW: 23 console checks
-  README.md                                section "Mandatory Block Leave (MBL) & casino visits", API table
-
-Verification (Postgres 16; database first created by the PRE-change code, then upgraded twice)
-  - services/backend/test_integrity_db.py: 58/58 pass.
-  - services/accessmanagement/test_console_integrity.py: 23/23 pass.
-  - Regression: CHANGE 006 test_mjr.py gives the same result before and after this change (its 5 e-mail
-    checks already fail on the current main because the MJR e-mail path changed after CHANGE 006).
-
-How to use
-  docker compose up -d --build        (existing volume upgrades automatically; no new secrets)
-  director / hr -> below the rotation panels.  itadmin -> Sensitive positions.
-  An employee (e.g. alice) -> My journey -> Casino visit declarations.
->>>>>>> Stashed changes
 
 -------------------------------------------------------------------------------
 [2026-11-13 19:55 SGT]  CHANGE 011 follow-up — Moving an appointment gave a 500 and an e-mail storm

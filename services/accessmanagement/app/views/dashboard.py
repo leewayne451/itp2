@@ -70,8 +70,6 @@ def _approver():
         mjr_tracked=[o for o in officers if o["state"] in ("rotation_planned", "shift_in_progress", "kept")],
         mjr_all=officers,
         departments=get_json("/api/departments", default=[]) if role == "director" else [],
-        # Mandatory Block Leave + casino declarations (CHANGE 012), same audience as MJR.
-        integrity=get_json("/api/integrity", default=None) if role in ("director", "hr") else None,
     )
 
 
@@ -88,7 +86,6 @@ def _it_admin():
         demand_forecast=get_json("/api/demand-forecast", default={}),
         offboarding_employees=[e for e in get_json("/api/employees", default=[])
                                if e["role"] == "employee"],
-        sensitive_officers=get_json("/api/integrity/officers", default=[]),   # CHANGE 012
     )
 
 

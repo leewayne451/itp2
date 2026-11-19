@@ -12,40 +12,4 @@
 <section class="panel"><p class="muted">Nothing in progress for you right now.</p></section>
 {% endif %}
 {% for t in journeys %}{{ trk.tracker_card(t) }}{% endfor %}
-
-{# Casino visit declaration (CHANGE 012) #}
-{% if casino and casino.in_scope %}
-<section class="panel" id="casino">
-  <div class="panel-head"><h2>Casino visit declarations</h2></div>
-  <p class="small"><strong>Your rule{% if casino.sensitive_post %} (sensitive position){% endif %}:</strong> {{ casino.rule.text }}
-    <span class="muted">Public Service rules. Gambling during working hours or on official premises is never allowed.
-    If you are in financial difficulty, tell HR — help such as financial counselling is available.</span></p>
-  <form method="post" action="{{ url_for('integrity.declare') }}" class="inline-form">
-    {% include "_casino_fields.html" %}
-    <button class="btn-sm primary" type="submit">Declare</button>
-  </form>
-  {% if casino.mbl and casino.mbl.remaining > 0 %}
-  {% set st = mbl_state(casino.mbl.state) %}
-  <p class="small"><strong>Mandatory Block Leave:</strong> you have <strong>{{ casino.mbl.remaining }} day(s)</strong> of annual leave
-    to clear by 31 December{% if casino.mbl.carried_forward_left %} ({{ casino.mbl.carried_forward_left }} carried forward from last year,
-    forfeited if not used){% endif %}. <span class="pill {{ st[1] }}">{{ st[0] }}</span>
-    {% if casino.mbl.start_by %} Please apply and start no later than {{ casino.mbl.start_by }}.{% endif %}</p>
-  {% endif %}
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>What</th><th>Date</th><th>Casino</th><th>Declared</th><th>Check</th></tr></thead>
-      <tbody>
-        {% if not casino.declarations %}<tr><td colspan="5" class="muted">You have not declared anything.</td></tr>{% endif %}
-        {% for d in casino.declarations %}
-        <tr>
-          <td>{% if d.kind == 'annual_levy' %}Annual levy pass{% elif d.official_duty %}Official visit{% else %}Personal visit{% endif %}</td>
-          <td>{{ d.visit_date }}</td><td>{{ d.casino }}</td><td>{{ d.declared_on }}</td>
-          <td>{% for f in d.flags %}{% set cf = casino_flag(f) %}<span class="pill {{ cf[1] }}">{{ cf[0] }}</span> {% else %}<span class="pill ok">OK</span>{% endfor %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %}
 {% endblock %}
